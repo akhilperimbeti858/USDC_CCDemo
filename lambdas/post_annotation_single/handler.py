@@ -20,7 +20,7 @@ The object at ``payload.s3Uri`` is a JSON list of dataset objects::
     [
       {
         "datasetObjectId": "0",
-        "dataObject": { "source": "...", "ofacMetadata": [ ... ] },
+        "dataObject": { "source": "...", "ofac_metadata": [ ... ] },
         "annotations": [
           { "workerId": "...", "annotationData": { "content": "<json string>" } }
         ]
@@ -66,7 +66,11 @@ def _parse_worker_content(annotation):
 
 
 def _ofac_by_offset(data_object):
-    meta = data_object.get("ofacMetadata") or []
+    # Current manifest field is `ofac_metadata`; `ofacMetadata` is legacy.
+    meta = data_object.get("ofac_metadata")
+    if meta is None:
+        meta = data_object.get("ofacMetadata")
+    meta = meta or []
     return {m["startOffset"]: m.get("ofacId") for m in meta}
 
 

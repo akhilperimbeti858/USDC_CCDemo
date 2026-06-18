@@ -29,7 +29,11 @@ def _parse_worker_content(annotation):
 
 
 def _ofac_by_offset(data_object):
-    return {m["startOffset"]: m.get("ofacId") for m in (data_object.get("ofacMetadata") or [])}
+    # Current manifest field is `ofac_metadata`; `ofacMetadata` is legacy.
+    meta = data_object.get("ofac_metadata")
+    if meta is None:
+        meta = data_object.get("ofacMetadata")
+    return {m["startOffset"]: m.get("ofacId") for m in (meta or [])}
 
 
 def _wrap(dataset_object_id, label_attribute_name, entities):

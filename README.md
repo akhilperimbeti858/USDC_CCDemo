@@ -85,15 +85,20 @@ Invoked **once per data object** before rendering. It:
 
 1. Reads the document text from `dataObject.source` (inline) or fetches
    `dataObject.source-ref` from S3.
-2. Passes through the **OFAC metadata** embedded in the manifest record
-   (`ofacMetadata`, default `[]`).
-3. Returns the `taskInput` the template binds to:
+2. Resolves the entity **label set** from the record's `labels` config
+   (falling back to the `ENTITY_LABELS` env var / built-in defaults).
+3. Passes through the **OFAC metadata** embedded in the manifest record
+   (`ofac_metadata`, default `[]` — empty for analysis jobs, populated for
+   training) and the seed spans (`initialEntities`, default `[]`).
+4. Returns the `taskInput` the template binds to (the manifest's
+   `initialEntities`/`ofac_metadata` map to the template's existing
+   `initialValue`/`ofacMetadata` keys):
 
 ```json
 {
   "taskInput": {
     "taskObject": "<document text>",
-    "labels": ["PERSON", "ORG", "LOC", "SANCTIONED_ENTITY"],
+    "labels": [{ "label": "PERSON" }, { "label": "ORG" }, { "label": "LOC" }, { "label": "SANCTIONED_ENTITY" }],
     "initialValue": [],
     "ofacMetadata": [
       { "startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "ORG" }
@@ -131,10 +136,10 @@ It binds to four task inputs supplied by the pre-annotation Lambda:
 
 | Binding                    | Source                                  |
 |----------------------------|------------------------------------------|
-| `task.input.taskObject`    | document text                            |
-| `task.input.labels`        | entity label set                         |
-| `task.input.initialValue`  | seed entity spans (may be `[]`)          |
-| `task.input.ofacMetadata`  | per-span OFAC records (`ofacId` by offset) |
+| `task.input.taskObject`    | document text (`source`)                 |
+| `task.input.labels`        | entity label set (record `labels` config) |
+| `task.input.initialValue`  | seed spans, from `initialEntities` (may be `[]`) |
+| `task.input.ofacMetadata`  | per-span OFAC records, from `ofac_metadata` (`ofacId` by offset) |
 
 > Note: the original template was provided pre-truncated; the missing
 > `<crowd-form>`/`<crowd-entity-annotation>` element, opening `<script>`, and
@@ -144,15 +149,26 @@ It binds to four task inputs supplied by the pre-annotation Lambda:
 
 ## Input manifest format
 
-`manifests/input.manifest.example` — JSON Lines, one record per line:
+`manifests/input.manifest.example` — JSON Lines, one record per line. Each
+record has the shape:
 
 ```json
 {"source": "Acme Corp wired funds to a flagged account in Tehran last March.",
- "ofacMetadata": [{"startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "ORG"}],
- "initialValue": [{"label": "ORG", "startOffset": 0, "endOffset": 9}]}
+ "labels": {"labels": [{"label": "PERSON"}, {"label": "ORG"}, {"label": "LOC"}, {"label": "SANCTIONED_ENTITY"}]},
+ "initialEntities": [{"label": "ORG", "startOffset": 0, "endOffset": 9}],
+ "ofac_metadata": [{"startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "ORG"}]}
 ```
 
-`ofacMetadata` and `initialValue` are optional. For large documents you may use
+| Field            | Meaning                                                                 |
+|------------------|-------------------------------------------------------------------------|
+| `source`         | the document text to annotate (or use `source-ref` for an S3 URI)        |
+| `labels`         | the entity label-set config for the record (`{"labels": [{"label": …}]}`) |
+| `initialEntities`| seed entity spans shown to the worker (may be `[]`)                       |
+| `ofac_metadata`  | per-span OFAC records — **empty `[]` for incoming analysis jobs, pre-populated for training jobs** |
+
+`labels`, `initialEntities`, and `ofac_metadata` are optional; sensible defaults
+apply when omitted. The legacy field names `initialValue`/`ofacMetadata` are
+still accepted. For large documents you may use
 `{"source-ref": "s3://bucket/key.txt"}` instead of inline `source`.
 
 ---

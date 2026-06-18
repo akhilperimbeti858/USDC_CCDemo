@@ -41,7 +41,9 @@ def test_pre_inline_source_passes_through_ofac():
         "labelingJobArn": "arn:test",
         "dataObject": {
             "source": "Acme Corp wired funds.",
-            "ofacMetadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1", "label": "ORG"}],
+            "labels": {"labels": [{"label": "PERSON"}, {"label": "ORG"}]},
+            "initialEntities": [],
+            "ofac_metadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1", "label": "ORG"}],
         },
     }
     out = pre.lambda_handler(event, None)
@@ -50,15 +52,30 @@ def test_pre_inline_source_passes_through_ofac():
     assert ti["taskObject"] == "Acme Corp wired funds."
     assert ti["ofacMetadata"][0]["ofacId"] == "SDN-1"
     assert ti["initialValue"] == []
-    assert "PERSON" in ti["labels"]
+    # Per-record label-set config is passed through to taskInput.labels.
+    assert {"label": "PERSON"} in ti["labels"]
 
 
 def test_pre_defaults_ofac_to_empty():
+    # Analysis-job record: no ofac_metadata -> taskInput gets an empty array.
     out = pre.lambda_handler({"dataObject": {"source": "no metadata here"}}, None)
     assert out["taskInput"]["ofacMetadata"] == []
 
 
-def test_pre_respects_entity_labels_env(monkeypatch=None):
+def test_pre_accepts_legacy_field_names():
+    # Legacy `ofacMetadata`/`initialValue` keys still work.
+    event = {"dataObject": {
+        "source": "x",
+        "ofacMetadata": [{"startOffset": 0, "endOffset": 1, "ofacId": "SDN-9"}],
+        "initialValue": [{"label": "ORG", "startOffset": 0, "endOffset": 1}],
+    }}
+    ti = pre.lambda_handler(event, None)["taskInput"]
+    assert ti["ofacMetadata"][0]["ofacId"] == "SDN-9"
+    assert ti["initialValue"][0]["label"] == "ORG"
+
+
+def test_pre_falls_back_to_entity_labels_env_without_record_labels():
+    # When the record carries no `labels` config, ENTITY_LABELS is the source.
     os.environ["ENTITY_LABELS"] = json.dumps(["A", "B"])
     try:
         out = pre.lambda_handler({"dataObject": {"source": "x"}}, None)

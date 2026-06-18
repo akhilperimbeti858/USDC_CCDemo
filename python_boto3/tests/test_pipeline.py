@@ -20,10 +20,23 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 # --- pre-annotation --------------------------------------------------------
 def test_build_task_input_inline_and_ofac():
-    ti = build_task_input({"source": "Acme Corp ", "ofacMetadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}]})
+    ti = build_task_input({
+        "source": "Acme Corp ",
+        "labels": {"labels": [{"label": "PERSON"}, {"label": "ORG"}]},
+        "initialEntities": [],
+        "ofac_metadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}],
+    })
     assert ti["taskObject"] == "Acme Corp"          # rstripped
     assert ti["ofacMetadata"][0]["ofacId"] == "SDN-1"
     assert ti["initialValue"] == []
+    assert {"label": "ORG"} in ti["labels"]         # per-record label config
+
+
+def test_build_task_input_accepts_legacy_field_names():
+    ti = build_task_input({"source": "x", "ofacMetadata": [{"startOffset": 0, "endOffset": 1, "ofacId": "SDN-9"}],
+                           "initialValue": [{"label": "ORG", "startOffset": 0, "endOffset": 1}]})
+    assert ti["ofacMetadata"][0]["ofacId"] == "SDN-9"
+    assert ti["initialValue"][0]["label"] == "ORG"
 
 
 def test_build_task_input_source_ref_uses_reader():

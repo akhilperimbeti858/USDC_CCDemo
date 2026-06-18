@@ -8,18 +8,36 @@ Crowd-HTML template. Kept AWS-free so it can run in the local simulator; the
 DEFAULT_LABELS = ["PERSON", "ORG", "LOC", "SANCTIONED_ENTITY"]
 
 
+def _labels_for(data_object, fallback):
+    """Resolve the label set, preferring the per-record manifest config.
+
+    Manifest carries the label set as ``{"labels": [{"label": "PERSON"}, ...]}``;
+    a bare array is tolerated. Falls back to ``fallback`` when absent.
+    """
+    cfg = data_object.get("labels")
+    if isinstance(cfg, dict) and isinstance(cfg.get("labels"), list):
+        return cfg["labels"]
+    if isinstance(cfg, list):
+        return cfg
+    return fallback
+
+
 def build_task_input(data_object, labels=None, source_ref_reader=None):
     """Return the ``taskInput`` dict for one dataset object.
 
     Args:
         data_object: a manifest record, e.g.
-            {"source": "...", "ofacMetadata": [...], "initialValue": [...]}
-            or {"source-ref": "s3://...", ...}.
-        labels: entity label set (defaults to DEFAULT_LABELS).
+            {"source": "...", "labels": {"labels": [...]},
+             "initialEntities": [...], "ofac_metadata": [...]}
+            or {"source-ref": "s3://...", ...}. The legacy field names
+            ``initialValue``/``ofacMetadata`` are still accepted.
+        labels: explicit override for the entity label set; when omitted the
+            per-record ``labels`` config is used, else DEFAULT_LABELS.
         source_ref_reader: optional callable(s3_uri) -> str, used only when the
             record carries a ``source-ref`` instead of inline ``source``.
     """
-    labels = labels or list(DEFAULT_LABELS)
+    if labels is None:
+        labels = _labels_for(data_object, list(DEFAULT_LABELS))
 
     if data_object.get("source") is not None:
         text = data_object["source"]
@@ -30,9 +48,17 @@ def build_task_input(data_object, labels=None, source_ref_reader=None):
     else:
         raise KeyError("dataObject must contain either 'source' or 'source-ref'")
 
+    initial = data_object.get("initialEntities")
+    if initial is None:
+        initial = data_object.get("initialValue")
+
+    ofac = data_object.get("ofac_metadata")
+    if ofac is None:
+        ofac = data_object.get("ofacMetadata")
+
     return {
         "taskObject": text.rstrip(),
         "labels": labels,
-        "initialValue": data_object.get("initialValue") or [],
-        "ofacMetadata": data_object.get("ofacMetadata") or [],
+        "initialValue": initial or [],
+        "ofacMetadata": ofac or [],
     }

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NER Annotation Viewer</title>
+  <script src="https://assets.crowd.aws/crowd-html-elements.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 1rem; }
+    .wrapper { display: flex; gap: 16px; align-items: flex-start; }
+    .crowd-container { flex: 1; }
+    .right-panel {
+      width: 300px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .panel-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .entity-list-item {
+      background: #f9f9f9;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #111;
+      border-left: 3px solid transparent;
+    }
+    .entity-list-item .span-text { font-weight: 600; font-size: 13px; }
+    .entity-list-item .span-meta { color: #888; margin-top: 2px; }
+
+    #ofac-modal {
+      display: none;
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 1.25rem;
+      z-index: 9999;
+      width: 280px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    #ofac-modal p { font-size: 13px; color: #555; margin-bottom: 8px; }
+    #ofac-modal strong { color: #111; }
+    #ofac-modal input {
+      width: 100%; padding: 6px 8px;
+      border: 1px solid #ddd; border-radius: 6px;
+      font-size: 13px; margin-bottom: 10px;
+    }
+    #ofac-modal-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+    #ofac-modal-buttons button {
+      padding: 5px 14px; border-radius: 6px;
+      font-size: 13px; cursor: pointer; border: 1px solid #ddd;
+    }
+    #ofac-confirm { background: #111; color: #fff; border-color: #111; }
+    #ofac-skip { background: #fff; color: #555; }
+  </style>
+</head>
+<body>
+
+<!--
+  Bindings supplied by the pre-annotation Lambda's taskInput:
+    task.input.taskObject   -> raw document text
+    task.input.labels       -> JSON array of entity labels (strings or {label,...})
+    task.input.initialValue -> JSON array of seed entity spans (may be [])
+    task.input.ofacMetadata -> JSON array of { startOffset, endOffset, ofacId, label }
+-->
+
+<crowd-form>
+  <div class="wrapper">
+    <div class="crowd-container">
+      <crowd-entity-annotation
+        name="annotatedResult"
+        header="Highlight and label each named entity. Confirm an OFAC ID when prompted."
+        labels="{{ task.input.labels | to_json }}"
+        text="{{ task.input.taskObject }}"
+        initial-value="{{ task.input.initialValue | to_json }}">
+      </crowd-entity-annotation>
+    </div>
+
+    <div class="right-panel">
+      <div>
+        <div class="panel-title">Entities</div>
+        <div id="entity-list"></div>
+      </div>
+    </div>
+  </div>
+</crowd-form>
+
+<div id="ofac-metadata-raw" style="display:none;">{{ task.input.ofacMetadata | to_json }}</div>
+<div id="labels-raw" style="display:none;">{{ task.input.labels | to_json }}</div>
+
+<script>
+  // --- Label color map -------------------------------------------------------
+  // Derived from task.input.labels so the entity list border colors stay in
+  // sync with whatever label set the labeling job is configured with.
+  const PALETTE = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c',
+                   '#0891b2', '#ca8a04', '#db2777', '#4f46e5', '#65a30d'];
+  const rawLabels = JSON.parse(document.getElementById('labels-raw').textContent || '[]');
+  const labelMap = {};
+  rawLabels.forEach((l, i) => {
+    const name = (typeof l === 'string') ? l : l.label;
+    labelMap[name] = { textColor: PALETTE[i % PALETTE.length] };
+  });
+
+  // --- OFAC metadata ---------------------------------------------------------
+  const ofacMetadata = JSON.parse(document.getElementById('ofac-metadata-raw').textContent);
+
+  const metaMap = {};
+  ofacMetadata.forEach(m => metaMap[m.startOffset] = m);
+
+  function scrollToEntityInDoc(ann, spanText) {
+    const crowdEl = document.querySelector('crowd-entity-annotation');
+
+    // Attempt shadow DOM pierce
+    try {
+      const shadowRoot = crowdEl.shadowRoot;
+      if (shadowRoot) {
+        const allSpans = shadowRoot.querySelectorAll('span');
+        for (const span of allSpans) {
+          if (span.textContent.trim() === spanText.trim()) {
+            span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Flash highlight
+            const original = span.style.outline;
+            span.style.outline = '2px solid #ff6600';
+            setTimeout(() => span.style.outline = original, 1500);
+            return;
+          }
+        }
+      }
+    } catch(e) {}
+
+    // Fallback — scroll crowd element container into view
+    crowdEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderEntityList(entities, text) {
+    const entityList = document.getElementById("entity-list");
+    entityList.innerHTML = '';
+    [...entities]
+      .sort((a, b) => a.startOffset - b.startOffset)
+      .forEach(ann => {
+        const lInfo = labelMap[ann.label] || { textColor: "#333" };
+        const spanText = text.slice(ann.startOffset, ann.endOffset);
+        const item = document.createElement("div");
+        item.className = "entity-list-item";
+        item.style.borderLeftColor = lInfo.textColor;
+        item.style.cursor = 'pointer';
+        const meta = metaMap[ann.startOffset];
+        const idStr = meta ? ` &nbsp;·&nbsp; ${meta.ofacId}` : '';
+        item.innerHTML = `<div class="span-text">${spanText}</div>
+                          <div class="span-meta">${ann.label} &nbsp;·&nbsp; ${ann.startOffset}–${ann.endOffset}${idStr}</div>`;
+        item.addEventListener('click', () => {
+          // Flash the clicked item
+          item.style.background = '#fff3cd';
+          setTimeout(() => item.style.background = '#f9f9f9', 1500);
+          scrollToEntityInDoc(ann, spanText);
+        });
+        entityList.appendChild(item);
+      });
+  }
+
+  // Read directly from crowd element attributes — no dependency on GT runtime
+  document.addEventListener('DOMContentLoaded', () => {
+    const crowdEl = document.querySelector('crowd-entity-annotation');
+    const text = crowdEl.getAttribute('text');
+    const initialEntities = JSON.parse(crowdEl.getAttribute('initial-value') || '[]');
+    renderEntityList(initialEntities, text);
+  });
+
+  // Sync on annotator changes when running inside Ground Truth
+  document.addEventListener('all-crowd-elements-ready', () => {
+    const crowdEl = document.querySelector('crowd-entity-annotation');
+    const text = crowdEl.getAttribute('text');
+    crowdEl.addEventListener('change', () => {
+      const updated = crowdEl.value?.entities || [];
+      renderEntityList(updated, text);
+
+      // Prompt for an OFAC ID whenever a newly added span has no known OFAC record.
+      const newSpan = updated.find(e => !(e.startOffset in metaMap));
+      if (newSpan) {
+        const text2 = crowdEl.getAttribute('text');
+        openOfacModal(newSpan, text2.slice(newSpan.startOffset, newSpan.endOffset));
+      }
+    });
+  });
+
+  // --- OFAC ID modal wiring --------------------------------------------------
+  let pendingSpan = null;
+  function openOfacModal(span, spanText) {
+    pendingSpan = span;
+    document.getElementById('ofac-modal-span').textContent = spanText;
+    document.getElementById('ofac-id-input').value = '';
+    document.getElementById('ofac-modal').style.display = 'block';
+  }
+  function closeOfacModal() {
+    pendingSpan = null;
+    document.getElementById('ofac-modal').style.display = 'none';
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('ofac-skip').addEventListener('click', closeOfacModal);
+    document.getElementById('ofac-confirm').addEventListener('click', () => {
+      const val = document.getElementById('ofac-id-input').value.trim();
+      if (pendingSpan && val) {
+        metaMap[pendingSpan.startOffset] = {
+          startOffset: pendingSpan.startOffset,
+          endOffset: pendingSpan.endOffset,
+          ofacId: val,
+          label: pendingSpan.label
+        };
+        const crowdEl = document.querySelector('crowd-entity-annotation');
+        renderEntityList(crowdEl.value?.entities || [], crowdEl.getAttribute('text'));
+      }
+      closeOfacModal();
+    });
+  });
+</script>
+
+
+<!-- OFAC ID Modal -->
+<div id="ofac-modal">
+  <p>New entity detected: <strong id="ofac-modal-span"></strong></p>
+  <p>Enter OFAC ID (optional):</p>
+  <input type="text" id="ofac-id-input" placeholder="e.g. SDN-12345" />
+  <div id="ofac-modal-buttons">
+    <button id="ofac-skip">Skip</button>
+    <button id="ofac-confirm">Confirm</button>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,6 @@
+# The pipeline logic + local simulator have NO third-party dependencies.
+# boto3 is only needed to actually launch a job / upload to S3 (aws_launcher.py).
+boto3>=1.34.0
+
+# Dev / testing
+pytest>=7.0.0

@@ -163,8 +163,13 @@ record has the shape:
 |------------------|-------------------------------------------------------------------------|
 | `source`         | the document text to annotate (or use `source-ref` for an S3 URI)        |
 | `labels`         | the entity label-set config for the record (`{"labels": [{"label": …}]}`) |
-| `initialEntities`| seed entity spans shown to the worker (may be `[]`)                       |
+| `initialEntities`| seed entity spans shown to the worker (may be `[]` only when `ofac_metadata` is also empty) |
 | `ofac_metadata`  | per-span OFAC records — **empty `[]` for incoming analysis jobs, pre-populated for training jobs** |
+
+> **Invariant:** `initialEntities` is never empty while `ofac_metadata` is
+> populated — every OFAC-flagged span is pre-seeded as an initial entity so the
+> worker starts from the known sanctioned spans. Both are empty together for an
+> incoming analysis job.
 
 `labels`, `initialEntities`, and `ofac_metadata` are optional; sensible defaults
 apply when omitted. The legacy field names `initialValue`/`ofacMetadata` are

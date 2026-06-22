@@ -16,7 +16,7 @@ There are two ways to run the same workflow:
 
 ## Table of contents
 
-- [Architecture & flow](#architecture--flow)
+- [Architecture & data flow](#architecture--data-flow)
 - [How custom labeling works](#how-custom-labeling-works)
 - [The Lambda logic](#the-lambda-logic)
 - [The custom UI template](#the-custom-ui-template)
@@ -31,35 +31,69 @@ There are two ways to run the same workflow:
 
 ---
 
-## Architecture & flow
+## Architecture & data flow
+
+Two entry points launch the **same** Ground Truth job against the same assets
+(input manifest, UI template, three Lambdas):
+
+- **`terraform/`** — provisions S3 + IAM + the 3 Lambdas **and** launches the job.
+- **`python_boto3/`** — runs the pipeline **locally** (no AWS) for testing, or
+  launches the job via boto3 against already-deployed infra.
+
+### Runtime flow (what Ground Truth executes — identical for both)
 
 ```
-                          ┌──────────────────────────────────────────────┐
-   input.manifest (S3) ──▶│            SageMaker Ground Truth             │
-   ner-template (S3)   ──▶│              custom labeling job             │
-                          └───────┬───────────────────────┬──────────────┘
-                                  │ (per data object)      │ (after batch labeled)
-                                  ▼                        ▼
-                       ┌────────────────────┐   ┌────────────────────────────┐
-                       │ Pre-annotation     │   │ Post-annotation /          │
-                       │ Lambda             │   │ consolidation Lambda       │
-                       │ build taskInput    │   │ single  ► pass-through     │
-                       │ (text, labels,     │   │ merge   ► vote + threshold │
-                       │  ofacMetadata)     │   │                            │
-                       └─────────┬──────────┘   └─────────────┬──────────────┘
-                                 ▼                            ▼
-                      rendered custom UI            output manifest (S3)
-                   (private workteam labels)      consolidated NER entities
+input/input.manifest   (one JSON record per line)
+        │  GT reads each record's dataObject
+        ▼
+┌─────────────────────────────────────────────┐
+│ PRE-annotation Lambda    (per data object)   │  lambdas/pre_annotation/handler.py
+│   text         ← source / source-ref         │
+│   labels       ← record `labels` config/env  │
+│   initialValue ← `initialEntities`           │
+│   ofacMetadata ← `ofac_metadata`             │
+│   → { taskInput, isHumanAnnotationRequired } │
+└─────────────────────────────────────────────┘
+        │ taskInput
+        ▼
+┌─────────────────────────────────────────────┐
+│ Worker UI       ui/ner-template.liquid.html  │
+│   highlight + label spans; entity-list panel │
+│   NEW span → OFAC modal prompts for an ID    │
+│   hidden `ofacOverrides` field ← entered IDs │
+│   → submits { annotatedResult, ofacOverrides}│
+└─────────────────────────────────────────────┘
+        │ all workers' annotations (S3 payload)
+        ▼
+┌─────────────────────────────────────────────┐
+│ POST-annotation Lambda   (consolidation)     │
+│   single ► pass-through; entered IDs win     │  lambdas/post_annotation_single
+│   merge  ► cluster overlaps, majority-vote   │  lambdas/post_annotation_merge
+│            label/boundary; keep entered id   │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+output/   output manifest — training data; entities carry `ofacId`
 ```
 
-1. The job reads a JSON-Lines **input manifest** from S3.
-2. For **each** data object, Ground Truth calls the **pre-annotation Lambda**,
-   which returns a `taskInput` object.
-3. The **custom UI template** is rendered with that `taskInput` and shown to a
-   worker on the **private workteam**.
-4. Once all workers finish a batch, Ground Truth calls the **post-annotation
-   (consolidation) Lambda**, which merges worker answers into a single label.
-5. Consolidated labels are written to the **output manifest** in S3.
+**OFAC ID flow:** the pre-Lambda seeds known IDs from the manifest; the UI prompts
+for an ID whenever a worker labels a *new* span and submits it in the hidden
+`ofacOverrides` field; the post-Lambda writes that ID onto the output entity's
+`ofacId`. So manually-tagged spans persist into the output/training data.
+
+### Who does what
+
+| Step                                | Terraform                          | Python local sim                 | Python launcher                     |
+|-------------------------------------|------------------------------------|----------------------------------|-------------------------------------|
+| Create S3 / IAM / deploy Lambdas    | ✅                                  | ❌                                | ❌ (assumes they exist)             |
+| Build create-labeling-job request   | `create-labeling-job.json.tftpl`   | —                                | `build_create_labeling_job_request` |
+| Launch the job                      | `null_resource` → AWS CLI          | ❌                                | `sagemaker.create_labeling_job`     |
+| Run pre/post logic in a **real** job| deployed Lambdas                   | local `ner_pipeline/` (test only)| deployed Lambdas                    |
+
+> The Python `ner_pipeline/*.py` functions **mirror** the Lambda handlers for
+> offline testing; a real job always runs the deployed `lambdas/*/handler.py`.
+> Terraform and the boto3 launcher build the same request and point Ground Truth at
+> the same deployed Lambda ARNs.
 
 ---
 

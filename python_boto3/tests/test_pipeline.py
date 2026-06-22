@@ -60,6 +60,47 @@ def test_consolidate_single_reattaches_ofac():
     assert ent["ofacId"] == "SDN-1"
 
 
+def _worker_with_overrides(wid, ents, overrides):
+    return {"workerId": wid, "annotationData": {"content": json.dumps({
+        "annotatedResult": {"entities": ents},
+        "ofacOverrides": json.dumps(overrides),
+    })}}
+
+
+def test_consolidate_single_carries_entered_ofac_id():
+    # New span with no manifest OFAC record; annotator-entered ID must pass through.
+    objs = [{
+        "datasetObjectId": "0",
+        "dataObject": {},
+        "annotations": [_worker_with_overrides(
+            "w1",
+            [{"label": "ORG", "startOffset": 70, "endOffset": 78}],
+            [{"startOffset": 70, "endOffset": 78, "ofacId": "SDN-NEW"}],
+        )],
+    }]
+    out = consolidate_single(objs, "ner-labels")
+    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
+    assert ent["ofacId"] == "SDN-NEW"
+
+
+def test_consolidate_merge_carries_entered_ofac_id_no_voting():
+    objs = [{
+        "datasetObjectId": "0",
+        "dataObject": {},
+        "annotations": [
+            _worker_with_overrides(
+                "w1",
+                [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
+                [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-NEW"}],
+            ),
+            _worker("w2", [{"label": "ORG", "startOffset": 0, "endOffset": 4}]),
+        ],
+    }]
+    out = consolidate_merge(objs, "ner-labels")
+    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
+    assert ent["ofacId"] == "SDN-NEW"
+
+
 def test_consolidate_merge_majority_and_threshold():
     objs = [{
         "datasetObjectId": "0",

@@ -113,15 +113,26 @@ Both read the consolidation payload from S3 and emit
 `consolidatedAnnotation.content[labelAttributeName].entities`.
 
 - **Single-worker** — `lambdas/post_annotation_single/handler.py`
-  Passes the one worker's entity spans straight through, re-attaching the `ofacId`
-  by `startOffset` if the crowd element dropped it.
+  Passes the one worker's entity spans straight through, attaching each span's
+  `ofacId` by `startOffset`. An OFAC ID the annotator typed in the UI modal
+  (submitted via the hidden `ofacOverrides` field) **wins** over the manifest seed
+  and is the only source for a brand-new span the manifest never knew about.
 
 - **Multi-worker merge** — `lambdas/post_annotation_merge/handler.py`
-  1. Flattens all workers' spans.
+  1. Flattens all workers' spans, stamping each with the OFAC ID that worker entered
+     (manifest seed as fallback).
   2. Clusters spans whose character ranges overlap.
   3. Per cluster: majority-vote the **label** and the exact `(start, end)` boundary.
   4. Keeps a span only if ≥ `AGREEMENT_RATIO` (default 0.5) of workers agreed.
-  5. Emits each entity with a `confidence` and the majority `ofacId`.
+  5. Emits each entity with a `confidence`. The `ofacId` is **not** voted on — the
+     first non-empty entered ID in the cluster is kept as-is.
+
+> **Annotator-entered OFAC IDs reach the output.** When a worker labels a new entity,
+> the UI prompts for an OFAC ID and submits it in a hidden `ofacOverrides` form field.
+> Consolidation writes that ID onto the output entity's `ofacId`, so manually-tagged
+> spans become part of the training data we keep. OFAC overrides are keyed by
+> `startOffset` (consistent with the rest of the pipeline); if a worker edits a span's
+> boundary *after* entering an ID, the override won't re-key to the new offset.
 
 ---
 
@@ -129,8 +140,10 @@ Both read the consolidation payload from S3 and emit
 
 `ui/ner-template.liquid.html` is a `<crowd-entity-annotation>` NER UI with:
 
-- a right-hand **entity list panel** (click to scroll/flash the span in the doc), and
-- an **OFAC ID modal** that prompts for an OFAC ID when a new, unknown entity is added.
+- a right-hand **entity list panel** (click to scroll/flash the span in the doc),
+- an **OFAC ID modal** that prompts for an OFAC ID when a new, unknown entity is added, and
+- a hidden `ofacOverrides` form field (inside `<crowd-form>`) that carries the
+  entered OFAC IDs into the submitted annotation so consolidation can persist them.
 
 It binds to four task inputs supplied by the pre-annotation Lambda:
 
@@ -140,6 +153,9 @@ It binds to four task inputs supplied by the pre-annotation Lambda:
 | `task.input.labels`        | entity label set (record `labels` config) |
 | `task.input.initialValue`  | seed spans, from `initialEntities` (may be `[]`) |
 | `task.input.ofacMetadata`  | per-span OFAC records, from `ofac_metadata` (`ofacId` by offset) |
+
+On submit, the worker's annotation includes both `annotatedResult` (the labeled
+entities) and `ofacOverrides` (the OFAC IDs entered in the modal, keyed by offset).
 
 > Note: the original template was provided pre-truncated; the missing
 > `<crowd-form>`/`<crowd-entity-annotation>` element, opening `<script>`, and

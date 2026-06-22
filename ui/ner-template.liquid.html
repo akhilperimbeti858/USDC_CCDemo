@@ -97,6 +97,12 @@
       </div>
     </div>
   </div>
+  <!--
+    Carries annotator-entered OFAC IDs into the submitted annotation. A crowd-form
+    serializes named inputs inside it, so the entered IDs reach the consolidation
+    Lambda (and the output/training manifest). Kept in sync with metaMap.
+  -->
+  <input type="hidden" name="ofacOverrides" id="ofac-overrides" value="[]">
 </crowd-form>
 
 <div id="ofac-metadata-raw" style="display:none;">{{ task.input.ofacMetadata | to_json }}</div>
@@ -120,6 +126,15 @@
 
   const metaMap = {};
   ofacMetadata.forEach(m => metaMap[m.startOffset] = m);
+
+  // Serialize the current OFAC records (manifest-seeded + annotator-entered) into
+  // the hidden form field so they are submitted with the annotation. Called once
+  // now (valid JSON from the start) and again whenever the modal adds an ID.
+  function syncOfacOverrides() {
+    const field = document.getElementById('ofac-overrides');
+    if (field) field.value = JSON.stringify(Object.values(metaMap));
+  }
+  syncOfacOverrides();
 
   function scrollToEntityInDoc(ann, spanText) {
     const crowdEl = document.querySelector('crowd-entity-annotation');
@@ -220,6 +235,7 @@
           ofacId: val,
           label: pendingSpan.label
         };
+        syncOfacOverrides();  // push the entered ID into the submitted form data
         const crowdEl = document.querySelector('crowd-entity-annotation');
         renderEntityList(crowdEl.value?.entities || [], crowdEl.getAttribute('text'));
       }

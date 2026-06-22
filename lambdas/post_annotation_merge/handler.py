@@ -47,6 +47,28 @@ def _parse_worker_content(annotation):
     return []
 
 
+def _ofac_by_offset(data_object):
+    # Current manifest field is `ofac_metadata`; `ofacMetadata` is legacy.
+    meta = data_object.get("ofac_metadata")
+    if meta is None:
+        meta = data_object.get("ofacMetadata")
+    return {m["startOffset"]: m.get("ofacId") for m in (meta or [])}
+
+
+def _worker_ofac_overrides(annotation):
+    """OFAC IDs the annotator typed in the UI modal, keyed by startOffset.
+
+    Submitted in the hidden `ofacOverrides` form field (JSON array). Empty ignored.
+    """
+    content = annotation.get("annotationData", {}).get("content", "{}")
+    if isinstance(content, str):
+        content = json.loads(content)
+    raw = content.get("ofacOverrides") or []
+    if isinstance(raw, str):
+        raw = json.loads(raw or "[]")
+    return {m["startOffset"]: m.get("ofacId") for m in raw if m.get("ofacId")}
+
+
 def _overlaps(a, b):
     """True when two spans share at least one character position."""
     return a["startOffset"] < b["endOffset"] and b["startOffset"] < a["endOffset"]
@@ -88,8 +110,8 @@ def _consolidate_cluster(cluster, num_workers):
     ).most_common(1)[0][0]
     start, end = boundary
 
-    ofac_ids = [s.get("ofacId") for s in cluster if s.get("ofacId")]
-    ofac_id = Counter(ofac_ids).most_common(1)[0][0] if ofac_ids else None
+    # No voting on OFAC IDs: keep the first non-empty entered ID in the cluster.
+    ofac_id = next((s.get("ofacId") for s in cluster if s.get("ofacId")), None)
 
     entity = {
         "label": label,
@@ -105,13 +127,21 @@ def _consolidate_cluster(cluster, num_workers):
 def _consolidate_one(dataset_object, label_attribute_name):
     annotations = dataset_object.get("annotations", [])
     num_workers = len(annotations)
+    manifest_map = _ofac_by_offset(dataset_object.get("dataObject", {}))
 
-    # Flatten all workers' spans, tagging each with its worker id for vote counting.
+    # Flatten all workers' spans, tagging each with its worker id for vote counting
+    # and stamping the OFAC ID the worker entered (manifest seed as fallback).
     all_spans = []
     for ann in annotations:
         worker_id = ann.get("workerId", id(ann))
+        overrides = _worker_ofac_overrides(ann)
         for ent in _parse_worker_content(ann):
-            all_spans.append({**ent, "_worker": worker_id})
+            start = ent.get("startOffset")
+            ofac_id = overrides.get(start) or manifest_map.get(start)
+            span = {**ent, "_worker": worker_id}
+            if ofac_id and "ofacId" not in span:
+                span["ofacId"] = ofac_id
+            all_spans.append(span)
 
     entities = []
     for cluster in _cluster_spans(all_spans):

@@ -111,3 +111,42 @@ resource "aws_iam_role_policy" "post_s3" {
   role   = aws_iam_role.post_lambda.id
   policy = data.aws_iam_policy_document.post_s3.json
 }
+
+# ---------------------------------------------------------------------------
+# Optional: execution role for the Comprehend-output -> manifest Lambda.
+# Created only when the converter Lambda is enabled (see lambda.tf locals).
+# ---------------------------------------------------------------------------
+resource "aws_iam_role" "comprehend_lambda" {
+  count              = local.comprehend_enabled ? 1 : 0
+  name               = "${var.project_name}-comprehend-lambda-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "comprehend_logs" {
+  count      = local.comprehend_enabled ? 1 : 0
+  role       = aws_iam_role.comprehend_lambda[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+data "aws_iam_policy_document" "comprehend_s3" {
+  count = local.comprehend_enabled ? 1 : 0
+
+  statement {
+    sid       = "ReadComprehendOutput"
+    actions   = ["s3:GetObject"]
+    resources = ["arn:aws:s3:::${local.comprehend_output_bucket}/*"]
+  }
+
+  statement {
+    sid       = "WriteManifest"
+    actions   = ["s3:PutObject"]
+    resources = ["${data.aws_s3_bucket.gt.arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "comprehend_s3" {
+  count  = local.comprehend_enabled ? 1 : 0
+  name   = "${var.project_name}-comprehend-s3"
+  role   = aws_iam_role.comprehend_lambda[0].id
+  policy = data.aws_iam_policy_document.comprehend_s3[0].json
+}

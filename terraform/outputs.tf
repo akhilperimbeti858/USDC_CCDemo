@@ -36,3 +36,8 @@ output "labeling_job_console_url" {
   description = "Ground Truth console URL for the launched labeling job."
   value       = "https://${var.aws_region}.console.aws.amazon.com/sagemaker/groundtruth?region=${var.aws_region}#/labeling-jobs/details/${local.labeling_job_name}"
 }
+
+output "comprehend_to_manifest_lambda_arn" {
+  description = "ARN of the optional Comprehend-output -> manifest Lambda (null when disabled)."
+  value       = local.comprehend_enabled ? aws_lambda_function.comprehend_to_manifest[0].arn : null
+}

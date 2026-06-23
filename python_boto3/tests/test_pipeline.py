@@ -14,7 +14,7 @@ from ner_pipeline.consolidation import consolidate_single
 from ner_pipeline.local_simulator import load_manifest, simulate
 from ner_pipeline.aws_launcher import LabelingJobConfig, build_create_labeling_job_request, launch
 from ner_pipeline.comprehend_to_manifest import (
-    comprehend_doc_to_record, comprehend_to_records, OFAC_LABELS,
+    comprehend_doc_to_record, comprehend_to_records, extract_comprehend_docs, OFAC_LABELS,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,6 +77,31 @@ def test_comprehend_min_score_filters_low_confidence():
     rec = comprehend_doc_to_record(_comprehend_doc(), "s3://bucket/docs", min_score=0.98)
     # Only the 0.99 OFAC_ORG survives (FTO 0.97 dropped; DATE not an OFAC type).
     assert [e["label"] for e in rec["initialEntities"]] == ["OFAC_ORG"]
+
+
+def _make_tar_gz(docs):
+    """Build an in-memory Comprehend-style output.tar.gz (one JSON line per doc)."""
+    import io
+    import tarfile
+    body = "".join(json.dumps(d) + "\n" for d in docs).encode("utf-8")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo(name="output")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    return buf.getvalue()
+
+
+def test_extract_comprehend_docs_parses_tar_gz():
+    docs = [
+        {"File": "doc1.txt", "Line": 0, "Entities": [
+            {"Score": 0.99, "Type": "OFAC_ORG", "Text": "Acme", "BeginOffset": 0, "EndOffset": 4}]},
+        {"File": "doc2.txt", "Line": 0, "Entities": []},
+    ]
+    out = extract_comprehend_docs(_make_tar_gz(docs))
+    assert [d["File"] for d in out] == ["doc1.txt", "doc2.txt"]
+    assert out[0]["Entities"][0]["Type"] == "OFAC_ORG"
+    assert out[1]["Entities"] == []
 
 
 def test_comprehend_record_round_trips_through_build_task_input():

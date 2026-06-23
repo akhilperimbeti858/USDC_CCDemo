@@ -40,6 +40,32 @@ import json
 OFAC_LABELS = ["OFAC_ORG", "OFAC_POI", "FTO"]
 
 
+def extract_comprehend_docs(tar_bytes):
+    """Unzip a Comprehend ``output.tar.gz`` (bytes) into a list of document objects.
+
+    The async job artifact is a gzipped tar holding one or more JSON-Lines members,
+    one document per line (``{"File": ..., "Entities": [...]}``). We read every
+    regular-file member and parse each non-empty line. Pure/offline; the deployed
+    Lambda (``lambdas/comprehend_to_manifest/handler.py``) mirrors this.
+    """
+    import io
+    import tarfile
+
+    docs = []
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                continue
+            for line in extracted.read().decode("utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    docs.append(json.loads(line))
+    return docs
+
+
 def _labels_config(labels):
     """The per-record label-set config shape consumed by the pre-annotation step."""
     return {"labels": [{"label": label} for label in labels]}

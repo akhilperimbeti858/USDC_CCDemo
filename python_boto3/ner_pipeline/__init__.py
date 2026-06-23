@@ -11,6 +11,7 @@ from .consolidation import consolidate_single
 from .comprehend_to_manifest import (
     comprehend_to_records,
     comprehend_doc_to_record,
+    extract_comprehend_docs,
     write_manifest,
     OFAC_LABELS,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "consolidate_single",
     "comprehend_to_records",
     "comprehend_doc_to_record",
+    "extract_comprehend_docs",
     "write_manifest",
     "OFAC_LABELS",
 ]

@@ -55,6 +55,27 @@ variable "entity_labels" {
   default     = ["OFAC_ORG", "OFAC_POI", "FTO"]
 }
 
+# --- Optional: Comprehend output.tar.gz -> manifest converter Lambda ---------
+# Setting source_docs_s3_base (non-empty) ENABLES the converter Lambda; empty
+# leaves the core GT stack unchanged.
+variable "source_docs_s3_base" {
+  description = "S3 prefix (e.g. s3://bucket/docs/) of the ORIGINAL documents, used to build manifest source-ref. Non-empty enables the Comprehend-output -> manifest Lambda."
+  type        = string
+  default     = ""
+}
+
+variable "comprehend_output_bucket" {
+  description = "Bucket where Comprehend writes output.tar.gz (read by the converter Lambda). Empty -> same as s3_bucket_name."
+  type        = string
+  default     = ""
+}
+
+variable "min_score" {
+  description = "Optional Comprehend Score floor for the converter Lambda; entities below it are dropped. Empty -> keep all."
+  type        = string
+  default     = ""
+}
+
 variable "task_title" {
   description = "Title shown to workers in the labeling UI."
   type        = string

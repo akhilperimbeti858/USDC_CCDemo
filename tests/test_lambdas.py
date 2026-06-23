@@ -22,6 +22,7 @@ def _load(name, relpath):
 
 pre = _load("pre_handler", "lambdas/pre_annotation/handler.py")
 post_single = _load("post_single_handler", "lambdas/post_annotation_single/handler.py")
+comprehend = _load("comprehend_handler", "lambdas/comprehend_to_manifest/handler.py")
 
 
 def _worker(worker_id, entities):
@@ -132,6 +133,59 @@ def test_post_single_new_span_carries_entered_ofac_id():
     out = post_single.lambda_handler(event, None)
     ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
     assert ent["ofacId"] == "SDN-NEW"
+
+
+# ---------------------------------------------------------------------------
+# Comprehend output.tar.gz -> manifest Lambda
+# ---------------------------------------------------------------------------
+def _make_tar_gz(docs):
+    import io
+    import tarfile
+    body = "".join(json.dumps(d) + "\n" for d in docs).encode("utf-8")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo(name="output")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    return buf.getvalue()
+
+
+def test_comprehend_lambda_writes_manifest_from_tar():
+    docs = [
+        {"File": "doc1.txt", "Entities": [
+            {"Score": 0.99, "Type": "OFAC_ORG", "Text": "Acme", "BeginOffset": 0, "EndOffset": 4},
+            {"Score": 0.80, "Type": "DATE", "Text": "March", "BeginOffset": 10, "EndOffset": 15}]},
+        {"File": "doc2.txt", "Entities": []},  # no detections -> empty seeds, still included
+    ]
+    captured = {}
+    comprehend._download_s3 = lambda b, k: _make_tar_gz(docs)            # type: ignore
+    comprehend._upload_s3 = lambda b, k, body, content_type="application/json": captured.update(  # type: ignore
+        bucket=b, key=k, body=body)
+
+    os.environ["SOURCE_DOCS_S3_BASE"] = "s3://docs-bucket/docs/"
+    os.environ["MANIFEST_S3_BUCKET"] = "gt-bucket"
+    try:
+        out = comprehend.lambda_handler({"bucket": "out-bucket", "key": "x/output.tar.gz"}, None)
+    finally:
+        del os.environ["SOURCE_DOCS_S3_BASE"], os.environ["MANIFEST_S3_BUCKET"]
+
+    assert out["records"] == 2 and out["entities"] == 1
+    assert captured["bucket"] == "gt-bucket" and captured["key"] == "input/input.manifest"
+    lines = [json.loads(l) for l in captured["body"].splitlines()]
+    assert lines[0]["source-ref"] == "s3://docs-bucket/docs/doc1.txt"
+    assert lines[0]["initialEntities"] == [{"label": "OFAC_ORG", "startOffset": 0, "endOffset": 4}]  # DATE dropped
+    assert lines[0]["labels"] == {"labels": [{"label": l} for l in ["OFAC_ORG", "OFAC_POI", "FTO"]]}
+    assert lines[0]["ofac_metadata"] == []
+    assert lines[1]["initialEntities"] == []  # doc2 had no entities
+
+
+def test_comprehend_resolve_location_event_shapes():
+    # S3 notification (key is URL-encoded) and EventBridge both resolve.
+    s3_evt = {"Records": [{"s3": {"bucket": {"name": "b"}, "object": {"key": "a+b/output.tar.gz"}}}]}
+    assert comprehend._resolve_output_location(s3_evt) == ("b", "a b/output.tar.gz")
+    eb_evt = {"detail": {"bucket": {"name": "b2"}, "object": {"key": "out/output.tar.gz"}}}
+    assert comprehend._resolve_output_location(eb_evt) == ("b2", "out/output.tar.gz")
+    assert comprehend._resolve_output_location({"output_s3_uri": "s3://b3/k/output.tar.gz"}) == ("b3", "k/output.tar.gz")
 
 
 def _run_all():

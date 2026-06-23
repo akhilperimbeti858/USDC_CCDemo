@@ -8,6 +8,9 @@ NER labeling job** and then **launches the job**. It is deliberately scoped:
 - Two **Lambda functions** — pre-annotation and single-worker consolidation.
 - The **labeling job** itself (via the AWS CLI, since Terraform has no native
   Ground Truth labeling-job resource).
+- **Optionally** (when `source_docs_s3_base` is set): a third Lambda + role that
+  converts a Comprehend `output.tar.gz` into the input manifest. See
+  [Optional converter Lambda](#optional-comprehend-converter-lambda).
 
 **What it does NOT do (by design)**
 - It does **not create the S3 bucket** and **uploads nothing**. The bucket, the
@@ -160,6 +163,11 @@ locals {
 - `aws_lambda_permission.gt_invoke_pre` / `gt_invoke_post_single` — let the
   `sagemaker.amazonaws.com` principal invoke each function (the resource-based half
   of the invoke equation; the role policy is the other half).
+- **Optional** (gated by `local.comprehend_enabled = var.source_docs_s3_base != ""`):
+  `archive_file` + `aws_lambda_function.comprehend_to_manifest` (the Comprehend
+  converter; no SageMaker token needed) + `aws_lambda_permission.s3_invoke_comprehend`
+  (lets S3 invoke it). Its IAM role lives in `iam.tf` (also gated). See
+  [Optional converter Lambda](#optional-comprehend-converter-lambda).
 
 ### `labeling_job.tf` — render the request and launch
 ```hcl
@@ -233,6 +241,40 @@ terraform destroy                              # stops the job + tears down infr
 ```
 
 ---
+
+## Optional: Comprehend converter Lambda
+
+Setting **`source_docs_s3_base`** (non-empty) enables a third Lambda,
+`${project}-comprehend-to-manifest` (`lambdas/comprehend_to_manifest/handler.py`),
+plus its IAM role. It downloads a Comprehend `output.tar.gz`, unzips it, and writes
+the GT input manifest (to `s3_bucket_name` / `manifest_s3_key`). All of this is
+**`count`-gated** — when the variable is empty (default), none of it is created and
+the core stack is untouched.
+
+Relevant variables:
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `source_docs_s3_base` | S3 prefix of the original docs (builds `source-ref`); **enables the Lambda** | `""` (disabled) |
+| `comprehend_output_bucket` | Bucket the Lambda reads `output.tar.gz` from | `""` → `s3_bucket_name` |
+| `min_score` | Optional Comprehend score floor | `""` (keep all) |
+
+**Triggering.** The stack adds an `aws_lambda_permission` letting S3 invoke the
+function, but it does **not** create the notification — it only *references* the
+bucket, and `aws_s3_bucket_notification` is authoritative (it would overwrite any
+existing notifications). Attach the trigger yourself, e.g.:
+
+```bash
+# Manual invoke:
+aws lambda invoke --function-name usdc-ner-comprehend-to-manifest \
+    --payload '{"bucket":"my-bucket","key":".../output.tar.gz"}' out.json
+
+# Or wire an S3 ObjectCreated notification / EventBridge rule to the function ARN
+# (terraform output comprehend_to_manifest_lambda_arn).
+```
+
+The handler also accepts S3-notification and EventBridge event shapes, so either
+trigger works once attached.
 
 ## Notes & caveats
 - **No remote backend** → local `terraform.tfstate`. Add S3 + DynamoDB for teams.

@@ -258,6 +258,29 @@ them from scratch and Comprehend false negatives aren't silently dropped.
 The result is the same JSON-Lines manifest described above, so the rest of the
 pipeline is unchanged.
 
+#### As a Lambda (raw `output.tar.gz` → manifest)
+
+`lambdas/comprehend_to_manifest/handler.py` does the same conversion at runtime,
+straight from the raw Comprehend async artifact: it downloads `output.tar.gz`,
+unzips it in memory, and writes the manifest to S3. It can be **invoked manually**
+or **triggered on S3 arrival** (S3 notification or EventBridge — all three event
+shapes are handled). Configured via env vars: `SOURCE_DOCS_S3_BASE` (the
+`--s3-docs-base` equivalent), `MANIFEST_S3_BUCKET` / `MANIFEST_S3_KEY`,
+`ENTITY_LABELS`, optional `MIN_SCORE`.
+
+Manual invoke:
+
+```bash
+aws lambda invoke --function-name usdc-ner-comprehend-to-manifest \
+    --payload '{"bucket":"my-bucket","key":"comprehend-output/.../output.tar.gz"}' out.json
+```
+
+Terraform deploys this Lambda + its IAM role **only when `source_docs_s3_base` is
+set** (off by default). It does **not** create the S3 trigger — the stack only
+references the bucket, so attach the ObjectCreated notification / EventBridge rule
+yourself (an `aws_lambda_permission` for S3 is already in place). See
+[`terraform/README.md`](terraform/README.md).
+
 ---
 
 ## Repository layout
@@ -274,7 +297,8 @@ pipeline is unchanged.
 │   └── outputs.tf
 ├── lambdas/                        Lambda source (deployed by Terraform)
 │   ├── pre_annotation/handler.py
-│   └── post_annotation_single/handler.py
+│   ├── post_annotation_single/handler.py
+│   └── comprehend_to_manifest/handler.py   Comprehend output.tar.gz -> manifest (optional)
 ├── ui/ner-template.liquid.html     Custom Crowd-HTML UI (OFAC-aware)
 ├── manifests/
 │   ├── input.manifest.example          hand-authored GT manifest (demo)

@@ -13,6 +13,9 @@ from ner_pipeline.pre_annotation import build_task_input
 from ner_pipeline.consolidation import consolidate_single, consolidate_merge
 from ner_pipeline.local_simulator import load_manifest, simulate
 from ner_pipeline.aws_launcher import LabelingJobConfig, build_create_labeling_job_request, launch
+from ner_pipeline.comprehend_to_manifest import (
+    comprehend_doc_to_record, comprehend_to_records, OFAC_LABELS,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -42,6 +45,47 @@ def test_build_task_input_accepts_legacy_field_names():
 def test_build_task_input_source_ref_uses_reader():
     ti = build_task_input({"source-ref": "s3://b/k"}, source_ref_reader=lambda uri: "from s3")
     assert ti["taskObject"] == "from s3"
+
+
+# --- comprehend -> manifest converter --------------------------------------
+def _comprehend_doc():
+    return {
+        "File": "doc1.txt",
+        "Entities": [
+            {"Score": 0.99, "Type": "OFAC_ORG", "Text": "Acme Corp", "BeginOffset": 0, "EndOffset": 9},
+            {"Score": 0.97, "Type": "FTO", "Text": "Tehran", "BeginOffset": 46, "EndOffset": 52},
+            {"Score": 0.88, "Type": "DATE", "Text": "last March", "BeginOffset": 53, "EndOffset": 63},
+        ],
+    }
+
+
+def test_comprehend_maps_offsets_labels_and_drops_unknown_types():
+    rec = comprehend_doc_to_record(_comprehend_doc(), "s3://bucket/docs/")
+    # source-ref built from base + File (single slash).
+    assert rec["source-ref"] == "s3://bucket/docs/doc1.txt"
+    # OFAC types kept and mapped; DATE dropped.
+    assert rec["initialEntities"] == [
+        {"label": "OFAC_ORG", "startOffset": 0, "endOffset": 9},
+        {"label": "FTO", "startOffset": 46, "endOffset": 52},
+    ]
+    # Analysis job: no OFAC IDs yet; humans add them in the UI.
+    assert rec["ofac_metadata"] == []
+    assert rec["labels"] == {"labels": [{"label": l} for l in OFAC_LABELS]}
+
+
+def test_comprehend_min_score_filters_low_confidence():
+    rec = comprehend_doc_to_record(_comprehend_doc(), "s3://bucket/docs", min_score=0.98)
+    # Only the 0.99 OFAC_ORG survives (FTO 0.97 dropped; DATE not an OFAC type).
+    assert [e["label"] for e in rec["initialEntities"]] == ["OFAC_ORG"]
+
+
+def test_comprehend_record_round_trips_through_build_task_input():
+    rec = comprehend_to_records([_comprehend_doc()], "s3://bucket/docs/")[0]
+    ti = build_task_input(rec, source_ref_reader=lambda uri: "Acme Corp wired funds to Tehran.")
+    assert ti["taskObject"] == "Acme Corp wired funds to Tehran."
+    assert ti["labels"] == [{"label": l} for l in OFAC_LABELS]
+    assert ti["initialValue"] == rec["initialEntities"]
+    assert ti["ofacMetadata"] == []
 
 
 # --- consolidation ---------------------------------------------------------

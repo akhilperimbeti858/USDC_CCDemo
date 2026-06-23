@@ -1,0 +1,22 @@
+[
+  {
+    "File": "doc1.txt",
+    "Entities": [
+      {"Score": 0.991, "Type": "OFAC_ORG", "Text": "Acme Corp", "BeginOffset": 0, "EndOffset": 9},
+      {"Score": 0.973, "Type": "FTO", "Text": "Tehran", "BeginOffset": 46, "EndOffset": 52},
+      {"Score": 0.880, "Type": "DATE", "Text": "last March", "BeginOffset": 53, "EndOffset": 63}
+    ]
+  },
+  {
+    "File": "doc2.txt",
+    "Entities": [
+      {"Score": 0.965, "Type": "OFAC_POI", "Text": "John Doe", "BeginOffset": 0, "EndOffset": 8}
+    ]
+  },
+  {
+    "File": "doc3.txt",
+    "Entities": [
+      {"Score": 0.948, "Type": "FTO", "Text": "Pyongyang", "BeginOffset": 31, "EndOffset": 41}
+    ]
+  }
+]

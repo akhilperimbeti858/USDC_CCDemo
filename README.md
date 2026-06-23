@@ -132,10 +132,10 @@ Invoked **once per data object** before rendering. It:
 {
   "taskInput": {
     "taskObject": "<document text>",
-    "labels": [{ "label": "PERSON" }, { "label": "ORG" }, { "label": "LOC" }, { "label": "SANCTIONED_ENTITY" }],
+    "labels": [{ "label": "OFAC_ORG" }, { "label": "OFAC_POI" }, { "label": "FTO" }],
     "initialValue": [],
     "ofacMetadata": [
-      { "startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "ORG" }
+      { "startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "OFAC_ORG" }
     ]
   },
   "isHumanAnnotationRequired": "true"
@@ -226,6 +226,41 @@ apply when omitted. The legacy field names `initialValue`/`ofacMetadata` are
 still accepted. For large documents you may use
 `{"source-ref": "s3://bucket/key.txt"}` instead of inline `source`.
 
+### From AWS Comprehend output
+
+In practice the manifest isn't hand-authored — it's generated from the output of an
+AWS Comprehend **custom entity recognizer**. Parse that output into a JSON array of
+per-document objects and convert it with the bundled tool:
+
+```json
+[ { "File": "doc1.txt",
+    "Entities": [ { "Score": 0.99, "Type": "OFAC_ORG", "Text": "Acme Corp",
+                    "BeginOffset": 0, "EndOffset": 9 }, ... ] }, ... ]
+```
+
+```bash
+cd python_boto3
+python build_manifest_from_comprehend.py \
+    --comprehend ../manifests/comprehend_output.example.json \
+    --s3-docs-base s3://my-bucket/docs/ \
+    --out ../manifests/input.manifest          # [--min-score 0.5] [--labels OFAC_ORG OFAC_POI FTO]
+```
+
+For each document the converter (`ner_pipeline/comprehend_to_manifest.py`) emits one
+record:
+
+- **`source-ref`** = `--s3-docs-base` + the Comprehend `File` (the pre-annotation
+  Lambda fetches the text from S3 at render time);
+- **`initialEntities`** = each kept entity's `BeginOffset`/`EndOffset`/`Type` →
+  `startOffset`/`endOffset`/`label`. Only the OFAC types (`OFAC_ORG`, `OFAC_POI`,
+  `FTO`) are kept; `--min-score` optionally drops low-confidence spans;
+- **`ofac_metadata`** = `[]` — this is an incoming **analysis** job; the human
+  reviewer confirms the seeded spans and adds OFAC IDs in the UI (which then flow to
+  the output via `ofacOverrides`).
+
+The result is the same JSON-Lines manifest described above, so the rest of the
+pipeline is unchanged.
+
 ---
 
 ## Repository layout
@@ -244,10 +279,13 @@ still accepted. For large documents you may use
 │   ├── post_annotation_single/handler.py
 │   └── post_annotation_merge/handler.py
 ├── ui/ner-template.liquid.html     Custom Crowd-HTML UI (OFAC-aware)
-├── manifests/input.manifest.example
+├── manifests/
+│   ├── input.manifest.example          hand-authored GT manifest (demo)
+│   └── comprehend_output.example.json  sample parsed Comprehend output
 ├── tests/test_lambdas.py           Unit tests for the Lambda handlers
 └── python_boto3/                   Python/boto3 equivalent + local simulator
-    ├── ner_pipeline/               pre-annotation, consolidation, simulator, launcher
+    ├── ner_pipeline/               pre-annotation, consolidation, comprehend converter, simulator, launcher
+    ├── build_manifest_from_comprehend.py  Comprehend output -> input manifest
     ├── run_local_simulation.py     run the whole flow offline
     ├── launch_labeling_job.py      boto3 create-labeling-job (with --dry-run)
     ├── sample_data/                simulated worker answers

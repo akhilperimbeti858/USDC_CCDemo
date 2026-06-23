@@ -40,7 +40,8 @@ import os
 
 # Default label set, overridable via the ENTITY_LABELS env var (JSON array).
 # Kept in sync with the labeling job's `entity_labels` Terraform variable.
-_DEFAULT_LABELS = ["PERSON", "ORG", "LOC", "SANCTIONED_ENTITY"]
+# OFAC categories emitted by the upstream Comprehend custom recognizer.
+_DEFAULT_LABELS = ["OFAC_ORG", "OFAC_POI", "FTO"]
 
 
 def _entity_labels():

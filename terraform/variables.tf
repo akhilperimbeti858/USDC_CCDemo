@@ -32,9 +32,9 @@ variable "label_attribute_name" {
 }
 
 variable "entity_labels" {
-  description = "Entity label set presented to workers and passed to the pre-annotation Lambda."
+  description = "Entity label set presented to workers and passed to the pre-annotation Lambda. OFAC categories from the upstream Comprehend recognizer."
   type        = list(string)
-  default     = ["PERSON", "ORG", "LOC", "SANCTIONED_ENTITY"]
+  default     = ["OFAC_ORG", "OFAC_POI", "FTO"]
 }
 
 variable "consolidation_mode" {

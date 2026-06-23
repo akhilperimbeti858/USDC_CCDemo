@@ -8,7 +8,7 @@ s3_bucket_name = "usdc-ner-groundtruth-REPLACE-WITH-UNIQUE-SUFFIX"
 private_workteam_arn = "arn:aws:sagemaker:us-east-1:111122223333:workteam/private-crowd/my-team"
 
 label_attribute_name = "ner-labels"
-entity_labels        = ["PERSON", "ORG", "LOC", "SANCTIONED_ENTITY"]
+entity_labels        = ["OFAC_ORG", "OFAC_POI", "FTO"]
 
 # 'single' -> single-worker pass-through consolidation (set workers = 1)
 # 'merge'  -> multi-worker span-merge consolidation  (set workers > 1)

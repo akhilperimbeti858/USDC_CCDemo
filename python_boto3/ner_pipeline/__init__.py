@@ -8,10 +8,20 @@ local simulator (``local_simulator.py``) both build on top of these.
 
 from .pre_annotation import build_task_input
 from .consolidation import consolidate_single, consolidate_merge, AGREEMENT_RATIO
+from .comprehend_to_manifest import (
+    comprehend_to_records,
+    comprehend_doc_to_record,
+    write_manifest,
+    OFAC_LABELS,
+)
 
 __all__ = [
     "build_task_input",
     "consolidate_single",
     "consolidate_merge",
     "AGREEMENT_RATIO",
+    "comprehend_to_records",
+    "comprehend_doc_to_record",
+    "write_manifest",
+    "OFAC_LABELS",
 ]

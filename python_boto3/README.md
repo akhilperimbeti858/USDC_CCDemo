@@ -12,13 +12,15 @@ only needed when you actually launch a job or upload assets to S3.
 ```
 python_boto3/
 ├── ner_pipeline/
-│   ├── pre_annotation.py     build_task_input()           (mirror of pre Lambda)
-│   ├── consolidation.py      consolidate_single/merge()   (mirror of post Lambdas)
-│   ├── local_simulator.py    run the full flow offline
-│   └── aws_launcher.py       boto3 create_labeling_job + S3 upload
-├── run_local_simulation.py   CLI: end-to-end offline simulation
-├── launch_labeling_job.py    CLI: real boto3 launch (supports --dry-run)
-├── sample_data/              simulated worker answers (single + merge)
+│   ├── pre_annotation.py        build_task_input()           (mirror of pre Lambda)
+│   ├── consolidation.py         consolidate_single/merge()   (mirror of post Lambdas)
+│   ├── comprehend_to_manifest.py  Comprehend output -> manifest records
+│   ├── local_simulator.py       run the full flow offline
+│   └── aws_launcher.py          boto3 create_labeling_job + S3 upload
+├── build_manifest_from_comprehend.py  CLI: Comprehend output -> input manifest
+├── run_local_simulation.py      CLI: end-to-end offline simulation
+├── launch_labeling_job.py       CLI: real boto3 launch (supports --dry-run)
+├── sample_data/                 simulated worker answers (single + merge)
 └── tests/test_pipeline.py
 ```
 

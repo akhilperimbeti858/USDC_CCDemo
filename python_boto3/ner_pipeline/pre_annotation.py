@@ -5,7 +5,8 @@ Crowd-HTML template. Kept AWS-free so it can run in the local simulator; the
 `source-ref` S3 path is delegated to an injectable reader for testability.
 """
 
-DEFAULT_LABELS = ["PERSON", "ORG", "LOC", "SANCTIONED_ENTITY"]
+# OFAC categories emitted by the upstream Comprehend custom recognizer.
+DEFAULT_LABELS = ["OFAC_ORG", "OFAC_POI", "FTO"]
 
 
 def _labels_for(data_object, fallback):

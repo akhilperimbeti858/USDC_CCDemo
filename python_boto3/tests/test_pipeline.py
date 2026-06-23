@@ -88,6 +88,22 @@ def test_comprehend_record_round_trips_through_build_task_input():
     assert ti["ofacMetadata"] == []
 
 
+def test_comprehend_no_entities_included_with_empty_seeds():
+    # Docs with no detections (empty list, null, or missing key) are still included
+    # as valid records with empty seeds -- the reviewer labels them from scratch.
+    for doc in ({"File": "d.txt", "Entities": []},
+                {"File": "d.txt", "Entities": None},
+                {"File": "d.txt"}):
+        rec = comprehend_doc_to_record(doc, "s3://bucket/docs/")
+        assert rec["source-ref"] == "s3://bucket/docs/d.txt"
+        assert rec["initialEntities"] == []
+        assert rec["ofac_metadata"] == []
+        assert rec["labels"] == {"labels": [{"label": l} for l in OFAC_LABELS]}
+        # Still round-trips to a valid taskInput.
+        ti = build_task_input(rec, source_ref_reader=lambda uri: "some doc text")
+        assert ti["initialValue"] == []
+
+
 # --- consolidation ---------------------------------------------------------
 def _worker(wid, ents):
     return {"workerId": wid, "annotationData": {"content": json.dumps({"annotatedResult": {"entities": ents}})}}

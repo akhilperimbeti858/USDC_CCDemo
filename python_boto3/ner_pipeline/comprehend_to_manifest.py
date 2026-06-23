@@ -67,7 +67,8 @@ def comprehend_doc_to_record(doc, s3_docs_base, allowed_types=None,
     allowed_set = set(allowed)
 
     initial_entities = []
-    for ent in doc.get("Entities", []):
+    # `or []` handles docs with no detections: "Entities": [], null, or a missing key.
+    for ent in (doc.get("Entities") or []):
         if ent.get("Type") not in allowed_set:
             continue
         if min_score is not None and ent.get("Score", 1.0) < min_score:

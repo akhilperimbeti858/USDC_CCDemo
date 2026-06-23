@@ -258,6 +258,10 @@ record:
   reviewer confirms the seeded spans and adds OFAC IDs in the UI (which then flow to
   the output via `ofacOverrides`).
 
+Documents with **no detected entities** (`Entities: []`, null, or everything filtered
+out) are still included — as records with `initialEntities: []` — so a reviewer labels
+them from scratch and Comprehend false negatives aren't silently dropped.
+
 The result is the same JSON-Lines manifest described above, so the rest of the
 pipeline is unchanged.
 

@@ -18,5 +18,9 @@
     "Entities": [
       {"Score": 0.948, "Type": "FTO", "Text": "Pyongyang", "BeginOffset": 31, "EndOffset": 41}
     ]
+  },
+  {
+    "File": "doc4.txt",
+    "Entities": []
   }
 ]

@@ -1,16 +1,20 @@
 # Copy to terraform.tfvars and fill in your values.
 
-aws_region     = "us-east-1"
-project_name   = "usdc-ner"
-s3_bucket_name = "usdc-ner-groundtruth-REPLACE-WITH-UNIQUE-SUFFIX"
+aws_region   = "us-east-1"
+project_name = "usdc-ner"
+
+# Name of the EXISTING bucket that already holds the manifest + UI template and
+# will receive output. This stack references it (data source); it does not create
+# it or upload anything. The bucket must allow GET via CORS for the worker UI.
+s3_bucket_name = "my-existing-groundtruth-bucket"
+
+# Keys of the assets already present in that bucket (defaults shown).
+manifest_s3_key    = "input/input.manifest"
+ui_template_s3_key = "templates/ner-template.liquid.html"
+output_s3_prefix   = "output/"
 
 # ARN of an existing private workteam (created in the SageMaker / Ground Truth console).
 private_workteam_arn = "arn:aws:sagemaker:us-east-1:111122223333:workteam/private-crowd/my-team"
 
 label_attribute_name = "ner-labels"
 entity_labels        = ["OFAC_ORG", "OFAC_POI", "FTO"]
-
-# 'single' -> single-worker pass-through consolidation (set workers = 1)
-# 'merge'  -> multi-worker span-merge consolidation  (set workers > 1)
-consolidation_mode                 = "single"
-number_of_human_workers_per_object = 1

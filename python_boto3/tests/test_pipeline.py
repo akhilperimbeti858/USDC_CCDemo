@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ner_pipeline.pre_annotation import build_task_input
-from ner_pipeline.consolidation import consolidate_single, consolidate_merge
+from ner_pipeline.consolidation import consolidate_single
 from ner_pipeline.local_simulator import load_manifest, simulate
 from ner_pipeline.aws_launcher import LabelingJobConfig, build_create_labeling_job_request, launch
 from ner_pipeline.comprehend_to_manifest import (
@@ -143,62 +143,16 @@ def test_consolidate_single_carries_entered_ofac_id():
     assert ent["ofacId"] == "SDN-NEW"
 
 
-def test_consolidate_merge_carries_entered_ofac_id_no_voting():
-    objs = [{
-        "datasetObjectId": "0",
-        "dataObject": {},
-        "annotations": [
-            _worker_with_overrides(
-                "w1",
-                [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
-                [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-NEW"}],
-            ),
-            _worker("w2", [{"label": "ORG", "startOffset": 0, "endOffset": 4}]),
-        ],
-    }]
-    out = consolidate_merge(objs, "ner-labels")
-    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
-    assert ent["ofacId"] == "SDN-NEW"
-
-
-def test_consolidate_merge_majority_and_threshold():
-    objs = [{
-        "datasetObjectId": "0",
-        "dataObject": {},
-        "annotations": [
-            _worker("w1", [{"label": "ORG", "startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"},
-                           {"label": "LOC", "startOffset": 13, "endOffset": 19}]),
-            _worker("w2", [{"label": "ORG", "startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}]),
-            _worker("w3", [{"label": "PERSON", "startOffset": 0, "endOffset": 4}]),
-        ],
-    }]
-    out = consolidate_merge(objs, "ner-labels")
-    ents = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
-    assert [(e["label"], e["startOffset"]) for e in ents] == [("ORG", 0)]  # LOC dropped (1/3)
-    assert ents[0]["ofacId"] == "SDN-1"
-    assert ents[0]["confidence"] == 1.0
-
-
 # --- local simulator (uses the real shared manifest) -----------------------
 def test_simulate_end_to_end_single():
     records = load_manifest(os.path.join(ROOT, "manifests", "input.manifest.example"))
     with open(os.path.join(HERE, "..", "sample_data", "worker_answers.single.json")) as f:
         answers = json.load(f)
-    report = simulate(records, answers, mode="single")
+    report = simulate(records, answers)
     assert len(report["consolidated"]) == len(records)
     # First doc: ORG@0-9 should carry the manifest's OFAC id.
     first = report["consolidated"][0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
     assert any(e.get("ofacId") == "SDN-12345" for e in first)
-
-
-def test_simulate_end_to_end_merge():
-    records = load_manifest(os.path.join(ROOT, "manifests", "input.manifest.example"))
-    with open(os.path.join(HERE, "..", "sample_data", "worker_answers.merge.json")) as f:
-        answers = json.load(f)
-    report = simulate(records, answers, mode="merge")
-    ents = report["consolidated"][0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
-    # 2/3 agree on ORG@0-9 -> kept; the lone PERSON loses the vote.
-    assert any(e["label"] == "ORG" and e["startOffset"] == 0 for e in ents)
 
 
 # --- aws launcher (request building + injected clients, no real AWS) -------
@@ -218,22 +172,17 @@ def test_build_request_shape():
     assert req["InputConfig"]["DataSource"]["S3DataSource"]["ManifestS3Uri"] == "s3://bucket/input/input.manifest"
 
 
-def test_launch_with_injected_clients():
+def test_launch_with_injected_client_uploads_nothing():
     calls = {}
-
-    class FakeS3:
-        def upload_file(self, path, bucket, key, ExtraArgs=None):
-            calls.setdefault("uploads", []).append(key)
 
     class FakeSM:
         def create_labeling_job(self, **kwargs):
             calls["create"] = kwargs
             return {"LabelingJobArn": "arn:aws:sagemaker:...:labeling-job/job"}
 
-    resp = launch(_cfg(), sagemaker_client=FakeSM(), s3_client=FakeS3(), upload=True)
+    # No S3 client and no upload step -- assets must already be in the bucket.
+    resp = launch(_cfg(), sagemaker_client=FakeSM())
     assert resp["LabelingJobArn"].endswith("labeling-job/job")
-    assert "input/input.manifest" in calls["uploads"]
-    assert "templates/ner-template.liquid.html" in calls["uploads"]
     assert calls["create"]["LabelingJobName"] == "job"
 
 

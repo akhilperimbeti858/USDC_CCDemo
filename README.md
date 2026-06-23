@@ -24,7 +24,6 @@ There are two ways to run the same workflow:
 - [Repository layout](#repository-layout)
 - [Option A — Terraform](#option-a--terraform-provision--launch)
 - [Option B — Python/boto3](#option-b--pythonboto3-local-testing--launch)
-- [Consolidation modes](#consolidation-modes-single-vs-merge)
 - [Testing & verification](#testing--verification)
 - [Prerequisites](#prerequisites)
 - [Security notes](#security-notes)
@@ -34,9 +33,10 @@ There are two ways to run the same workflow:
 ## Architecture & data flow
 
 Two entry points launch the **same** Ground Truth job against the same assets
-(input manifest, UI template, three Lambdas):
+(input manifest + UI template that **already exist in your S3 bucket**, two Lambdas):
 
-- **`terraform/`** — provisions S3 + IAM + the 3 Lambdas **and** launches the job.
+- **`terraform/`** — provisions IAM + the 2 Lambdas, **references** the existing
+  bucket/manifest/template (no uploads), **and** launches the job.
 - **`python_boto3/`** — runs the pipeline **locally** (no AWS) for testing, or
   launches the job via boto3 against already-deployed infra.
 
@@ -67,9 +67,8 @@ input/input.manifest   (one JSON record per line)
         ▼
 ┌─────────────────────────────────────────────┐
 │ POST-annotation Lambda   (consolidation)     │
-│   single ► pass-through; entered IDs win     │  lambdas/post_annotation_single
-│   merge  ► cluster overlaps, majority-vote   │  lambdas/post_annotation_merge
-│            label/boundary; keep entered id   │
+│   single-worker pass-through;                │  lambdas/post_annotation_single
+│   entered OFAC IDs win / are re-attached     │
 └─────────────────────────────────────────────┘
         │
         ▼
@@ -85,7 +84,8 @@ for an ID whenever a worker labels a *new* span and submits it in the hidden
 
 | Step                                | Terraform                          | Python local sim                 | Python launcher                     |
 |-------------------------------------|------------------------------------|----------------------------------|-------------------------------------|
-| Create S3 / IAM / deploy Lambdas    | ✅                                  | ❌                                | ❌ (assumes they exist)             |
+| Create IAM / deploy Lambdas         | ✅                                  | ❌                                | ❌ (assumes they exist)             |
+| S3 bucket + manifest + template     | **referenced** (must pre-exist)    | reads local manifest             | **referenced** (must pre-exist)     |
 | Build create-labeling-job request   | `create-labeling-job.json.tftpl`   | —                                | `build_create_labeling_job_request` |
 | Launch the job                      | `null_resource` → AWS CLI          | ❌                                | `sagemaker.create_labeling_job`     |
 | Run pre/post logic in a **real** job| deployed Lambdas                   | local `ner_pipeline/` (test only)| deployed Lambdas                    |
@@ -142,24 +142,17 @@ Invoked **once per data object** before rendering. It:
 }
 ```
 
-### Post-annotation Lambda — two variants
-Both read the consolidation payload from S3 and emit
-`consolidatedAnnotation.content[labelAttributeName].entities`.
+### Post-annotation Lambda — single-worker consolidation
+`lambdas/post_annotation_single/handler.py` reads the consolidation payload from S3
+and emits `consolidatedAnnotation.content[labelAttributeName].entities`.
 
-- **Single-worker** — `lambdas/post_annotation_single/handler.py`
-  Passes the one worker's entity spans straight through, attaching each span's
-  `ofacId` by `startOffset`. An OFAC ID the annotator typed in the UI modal
-  (submitted via the hidden `ofacOverrides` field) **wins** over the manifest seed
-  and is the only source for a brand-new span the manifest never knew about.
+It passes the one worker's entity spans straight through, attaching each span's
+`ofacId` by `startOffset`. An OFAC ID the annotator typed in the UI modal
+(submitted via the hidden `ofacOverrides` field) **wins** over the manifest seed
+and is the only source for a brand-new span the manifest never knew about.
 
-- **Multi-worker merge** — `lambdas/post_annotation_merge/handler.py`
-  1. Flattens all workers' spans, stamping each with the OFAC ID that worker entered
-     (manifest seed as fallback).
-  2. Clusters spans whose character ranges overlap.
-  3. Per cluster: majority-vote the **label** and the exact `(start, end)` boundary.
-  4. Keeps a span only if ≥ `AGREEMENT_RATIO` (default 0.5) of workers agreed.
-  5. Emits each entity with a `confidence`. The `ofacId` is **not** voted on — the
-     first non-empty entered ID in the cluster is kept as-is.
+> A multi-worker merge/vote consolidator is intentionally out of scope for now; the
+> workflow runs with one worker per object.
 
 > **Annotator-entered OFAC IDs reach the output.** When a worker labels a new entity,
 > the UI prompts for an OFAC ID and submits it in a hidden `ofacOverrides` form field.
@@ -272,16 +265,16 @@ pipeline is unchanged.
 ```
 .
 ├── README.md                       This file
-├── terraform/                      IaC: provision infra + launch the job
+├── terraform/                      IaC: IAM + Lambdas, reference existing S3, launch job
 │   ├── versions.tf  providers.tf  variables.tf  terraform.tfvars.example
-│   ├── s3.tf  iam.tf  lambda.tf
+│   ├── s3.tf                       references the EXISTING bucket + objects (no uploads)
+│   ├── iam.tf  lambda.tf
 │   ├── labeling_job.tf             null_resource that runs create-labeling-job
 │   ├── create-labeling-job.json.tftpl
 │   └── outputs.tf
 ├── lambdas/                        Lambda source (deployed by Terraform)
 │   ├── pre_annotation/handler.py
-│   ├── post_annotation_single/handler.py
-│   └── post_annotation_merge/handler.py
+│   └── post_annotation_single/handler.py
 ├── ui/ner-template.liquid.html     Custom Crowd-HTML UI (OFAC-aware)
 ├── manifests/
 │   ├── input.manifest.example          hand-authored GT manifest (demo)
@@ -300,18 +293,24 @@ pipeline is unchanged.
 
 ## Option A — Terraform (provision + launch)
 
+> **Prerequisite:** the bucket named in `s3_bucket_name` must already exist and
+> already contain the input manifest and the UI template at `manifest_s3_key` /
+> `ui_template_s3_key`. Terraform references them (data source) and uploads nothing.
+> The bucket must also allow `GET` via CORS so the worker UI can fetch the template.
+
 ```bash
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
-#   edit terraform.tfvars: s3_bucket_name, private_workteam_arn, consolidation_mode, ...
+#   edit terraform.tfvars: s3_bucket_name (existing), private_workteam_arn, keys, ...
 
 terraform init
 terraform plan
-terraform apply        # builds infra AND launches the labeling job
+terraform apply        # deploys IAM + Lambdas AND launches the labeling job
 ```
 
-This creates the S3 bucket (uploading the manifest + UI template), the Ground
-Truth execution role, three Lambdas, and then runs `create-labeling-job`.
+This creates the Ground Truth execution role, two Lambdas (pre-annotation +
+single-worker consolidation), and then runs `create-labeling-job` against the
+existing S3 assets.
 
 ```bash
 terraform output labeling_job_console_url   # open the job in the console
@@ -325,11 +324,12 @@ terraform destroy                           # stops the job + tears down infra
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `s3_bucket_name` | Globally-unique bucket | _(required)_ |
+| `s3_bucket_name` | Name of the **existing** bucket holding the assets | _(required)_ |
 | `private_workteam_arn` | Existing private workteam ARN | _(required)_ |
-| `consolidation_mode` | `single` or `merge` | `single` |
-| `number_of_human_workers_per_object` | Workers per item | `1` |
-| `entity_labels` | Label set | `["PERSON","ORG","LOC","SANCTIONED_ENTITY"]` |
+| `manifest_s3_key` | Existing manifest object key | `input/input.manifest` |
+| `ui_template_s3_key` | Existing UI template object key | `templates/ner-template.liquid.html` |
+| `output_s3_prefix` | Output prefix in the bucket | `output/` |
+| `entity_labels` | Label set | `["OFAC_ORG","OFAC_POI","FTO"]` |
 | `label_attribute_name` | Output manifest key | `ner-labels` |
 | `aws_region` | Region | `us-east-1` |
 
@@ -341,37 +341,23 @@ Run the **entire pipeline offline** (no AWS, no credentials needed):
 
 ```bash
 cd python_boto3
-python run_local_simulation.py --mode single
-python run_local_simulation.py --mode merge
+python run_local_simulation.py
 ```
 
-Launch a real job via boto3 (infra/roles/Lambdas must already exist):
+Launch a real job via boto3 (infra/roles/Lambdas **and** the S3 assets must
+already exist — the launcher uploads nothing):
 
 ```bash
 pip install -r requirements.txt
 python launch_labeling_job.py --dry-run \      # preview the request first
-    --job-name usdc-ner-demo --bucket my-bucket \
+    --job-name usdc-ner-demo --bucket my-existing-bucket \
     --role-arn arn:... --workteam-arn arn:... \
     --pre-lambda-arn arn:... --post-lambda-arn arn:...
 
-# drop --dry-run to actually upload assets + create the job
+# drop --dry-run to create the job (references the manifest/template already in S3)
 ```
 
 See [`python_boto3/README.md`](python_boto3/README.md) for details.
-
----
-
-## Consolidation modes: single vs. merge
-
-| | `single` | `merge` |
-|---|----------|---------|
-| Workers per object | 1 | N (>1) |
-| Logic | pass-through | overlap-cluster + majority vote |
-| Survives if | always | ≥ `AGREEMENT_RATIO` of workers agree |
-| Output extras | — | `confidence` per entity |
-
-Set `consolidation_mode` (Terraform) or `--mode` (simulator) to choose. Both
-post-annotation Lambdas are always deployed; the job is wired to the selected one.
 
 ---
 

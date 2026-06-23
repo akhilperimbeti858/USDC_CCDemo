@@ -22,7 +22,6 @@ def _load(name, relpath):
 
 pre = _load("pre_handler", "lambdas/pre_annotation/handler.py")
 post_single = _load("post_single_handler", "lambdas/post_annotation_single/handler.py")
-post_merge = _load("post_merge_handler", "lambdas/post_annotation_merge/handler.py")
 
 
 def _worker(worker_id, entities):
@@ -105,53 +104,6 @@ def test_post_single_pass_through_and_reattach_ofac(monkeypatch=None):
     assert entities[0]["ofacId"] == "SDN-1"  # re-attached from dataObject
 
 
-# ---------------------------------------------------------------------------
-# Post-annotation Lambda - multi-worker merge
-# ---------------------------------------------------------------------------
-def test_post_merge_majority_keeps_agreed_span():
-    # 3 workers; 2 agree on ORG@0-4, the third disagrees on label.
-    dataset = [{
-        "datasetObjectId": "0",
-        "dataObject": {"source": "Acme Corp"},
-        "annotations": [
-            _worker("w1", [{"label": "ORG", "startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}]),
-            _worker("w2", [{"label": "ORG", "startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}]),
-            _worker("w3", [{"label": "PERSON", "startOffset": 0, "endOffset": 4}]),
-        ],
-    }]
-    post_merge._read_s3_json = lambda uri: dataset  # type: ignore
-    event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
-    out = post_merge.lambda_handler(event, None)
-
-    entities = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
-    assert len(entities) == 1
-    assert entities[0]["label"] == "ORG"          # majority label
-    assert entities[0]["ofacId"] == "SDN-1"        # majority OFAC id
-    assert entities[0]["confidence"] == 1.0        # all 3 overlapped the cluster
-
-
-def test_post_merge_drops_below_threshold_span():
-    # Only 1 of 3 workers marked a second span -> below the 0.5 agreement ratio.
-    dataset = [{
-        "datasetObjectId": "0",
-        "dataObject": {"source": "Acme Corp in Tehran"},
-        "annotations": [
-            _worker("w1", [{"label": "ORG", "startOffset": 0, "endOffset": 4},
-                           {"label": "LOC", "startOffset": 13, "endOffset": 19}]),
-            _worker("w2", [{"label": "ORG", "startOffset": 0, "endOffset": 4}]),
-            _worker("w3", [{"label": "ORG", "startOffset": 0, "endOffset": 4}]),
-        ],
-    }]
-    post_merge._read_s3_json = lambda uri: dataset  # type: ignore
-    event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
-    out = post_merge.lambda_handler(event, None)
-
-    entities = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
-    labels = [(e["label"], e["startOffset"]) for e in entities]
-    assert ("ORG", 0) in labels        # kept (3/3)
-    assert ("LOC", 13) not in labels   # dropped (1/3 < 0.5)
-
-
 def _worker_with_overrides(worker_id, entities, overrides):
     """Worker submission carrying a hidden-field `ofacOverrides` JSON string."""
     return {
@@ -179,28 +131,6 @@ def test_post_single_new_span_carries_entered_ofac_id():
     event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
     out = post_single.lambda_handler(event, None)
     ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
-    assert ent["ofacId"] == "SDN-NEW"
-
-
-def test_post_merge_new_span_carries_entered_ofac_id_no_voting():
-    # One worker entered an OFAC ID for the agreed span; with no voting it survives.
-    dataset = [{
-        "datasetObjectId": "0",
-        "dataObject": {},
-        "annotations": [
-            _worker_with_overrides(
-                "w1",
-                [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
-                [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-NEW"}],
-            ),
-            _worker("w2", [{"label": "ORG", "startOffset": 0, "endOffset": 4}]),
-        ],
-    }]
-    post_merge._read_s3_json = lambda uri: dataset  # type: ignore
-    event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
-    out = post_merge.lambda_handler(event, None)
-    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
-    assert ent["label"] == "ORG"
     assert ent["ofacId"] == "SDN-NEW"
 
 

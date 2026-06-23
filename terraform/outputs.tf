@@ -1,6 +1,6 @@
 output "s3_bucket" {
-  description = "S3 bucket holding the input manifest, UI template, and output."
-  value       = aws_s3_bucket.gt.id
+  description = "Existing S3 bucket holding the input manifest, UI template, and output."
+  value       = data.aws_s3_bucket.gt.id
 }
 
 output "input_manifest_s3_uri" {
@@ -24,16 +24,8 @@ output "pre_annotation_lambda_arn" {
 }
 
 output "post_single_lambda_arn" {
-  value = aws_lambda_function.post_single.arn
-}
-
-output "post_merge_lambda_arn" {
-  value = aws_lambda_function.post_merge.arn
-}
-
-output "active_consolidation_lambda_arn" {
-  description = "Post-annotation Lambda actually wired into the launched job."
-  value       = local.selected_post_lambda_arn
+  description = "Single-worker consolidation Lambda wired into the job."
+  value       = aws_lambda_function.post_single.arn
 }
 
 output "labeling_job_name" {

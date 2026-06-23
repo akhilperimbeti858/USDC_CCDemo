@@ -9,7 +9,7 @@ behavior before spending money on a real labeling job.
 import json
 
 from .pre_annotation import build_task_input
-from .consolidation import consolidate_single, consolidate_merge
+from .consolidation import consolidate_single
 
 
 def load_manifest(path):
@@ -46,8 +46,8 @@ def build_consolidation_input(records, worker_answers):
     return dataset_objects
 
 
-def simulate(records, worker_answers, mode="single", label_attribute_name="ner-labels"):
-    """Run pre-annotation + consolidation locally and return a report.
+def simulate(records, worker_answers, label_attribute_name="ner-labels"):
+    """Run pre-annotation + single-worker consolidation locally and return a report.
 
     Returns a dict with the rendered taskInputs and the consolidated output
     manifest entries, so callers can assert on the full pipeline.
@@ -55,11 +55,9 @@ def simulate(records, worker_answers, mode="single", label_attribute_name="ner-l
     task_inputs = [build_task_input(r) for r in records]
 
     dataset_objects = build_consolidation_input(records, worker_answers)
-    consolidate = consolidate_merge if mode == "merge" else consolidate_single
-    consolidated = consolidate(dataset_objects, label_attribute_name)
+    consolidated = consolidate_single(dataset_objects, label_attribute_name)
 
     return {
-        "mode": mode,
         "label_attribute_name": label_attribute_name,
         "task_inputs": task_inputs,
         "consolidated": consolidated,

@@ -30,8 +30,8 @@ data "aws_iam_policy_document" "gt_inline" {
     sid     = "S3Access"
     actions = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:GetBucketLocation"]
     resources = [
-      aws_s3_bucket.gt.arn,
-      "${aws_s3_bucket.gt.arn}/*",
+      data.aws_s3_bucket.gt.arn,
+      "${data.aws_s3_bucket.gt.arn}/*",
     ]
   }
 
@@ -41,7 +41,6 @@ data "aws_iam_policy_document" "gt_inline" {
     resources = [
       aws_lambda_function.pre_annotation.arn,
       aws_lambda_function.post_single.arn,
-      aws_lambda_function.post_merge.arn,
     ]
   }
 }
@@ -79,7 +78,7 @@ resource "aws_iam_role_policy_attachment" "pre_logs" {
 data "aws_iam_policy_document" "pre_s3" {
   statement {
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.gt.arn}/*"]
+    resources = ["${data.aws_s3_bucket.gt.arn}/*"]
   }
 }
 
@@ -103,7 +102,7 @@ resource "aws_iam_role_policy_attachment" "post_logs" {
 data "aws_iam_policy_document" "post_s3" {
   statement {
     actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
-    resources = [aws_s3_bucket.gt.arn, "${aws_s3_bucket.gt.arn}/*"]
+    resources = [data.aws_s3_bucket.gt.arn, "${data.aws_s3_bucket.gt.arn}/*"]
   }
 }
 

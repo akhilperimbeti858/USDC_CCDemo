@@ -1,22 +1,14 @@
 locals {
-  # The post-annotation Lambda that actually drives this job is selected by
-  # consolidation_mode; both functions are deployed regardless.
-  selected_post_lambda_arn = (
-    var.consolidation_mode == "merge"
-    ? aws_lambda_function.post_merge.arn
-    : aws_lambda_function.post_single.arn
-  )
-
   # A short, deterministic suffix that changes only when the job configuration
   # changes. A changed suffix => a new unique labeling job name on re-apply.
+  # (Object etags aren't available since assets live in an existing bucket we
+  # don't manage; the S3 URIs + pre-Lambda code hash + post ARN are used instead.)
   config_hash = substr(sha256(join(":", [
-    aws_s3_object.input_manifest.etag,
-    aws_s3_object.ui_template.etag,
+    local.manifest_s3_uri,
+    local.ui_template_s3_uri,
     data.archive_file.pre.output_base64sha256,
-    local.selected_post_lambda_arn,
+    aws_lambda_function.post_single.arn,
     var.label_attribute_name,
-    var.consolidation_mode,
-    tostring(var.number_of_human_workers_per_object),
   ])), 0, 8)
 
   labeling_job_name = "${var.project_name}-ner-${local.config_hash}"
@@ -30,10 +22,9 @@ locals {
     workteam_arn                       = var.private_workteam_arn
     ui_template_s3_uri                 = local.ui_template_s3_uri
     pre_lambda_arn                     = aws_lambda_function.pre_annotation.arn
-    post_lambda_arn                    = local.selected_post_lambda_arn
+    post_lambda_arn                    = aws_lambda_function.post_single.arn
     task_title                         = var.task_title
     task_description                   = var.task_description
-    workers_per_object                 = var.number_of_human_workers_per_object
     task_time_limit_seconds            = var.task_time_limit_seconds
     task_availability_lifetime_seconds = var.task_availability_lifetime_seconds
   })
@@ -59,9 +50,6 @@ resource "null_resource" "labeling_job" {
     aws_iam_role_policy_attachment.gt_managed,
     aws_lambda_permission.gt_invoke_pre,
     aws_lambda_permission.gt_invoke_post_single,
-    aws_lambda_permission.gt_invoke_post_merge,
-    aws_s3_object.input_manifest,
-    aws_s3_object.ui_template,
     local_file.cli_input,
   ]
 

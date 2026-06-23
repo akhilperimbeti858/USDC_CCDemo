@@ -11,8 +11,26 @@ variable "project_name" {
 }
 
 variable "s3_bucket_name" {
-  description = "Globally-unique S3 bucket name for input manifest, UI template, and output."
+  description = "Name of the EXISTING S3 bucket that already holds the input manifest, the UI template, and that will receive output. Not created by this stack."
   type        = string
+}
+
+variable "manifest_s3_key" {
+  description = "Key of the existing input manifest object in s3_bucket_name."
+  type        = string
+  default     = "input/input.manifest"
+}
+
+variable "ui_template_s3_key" {
+  description = "Key of the existing Crowd-HTML UI template object in s3_bucket_name."
+  type        = string
+  default     = "templates/ner-template.liquid.html"
+}
+
+variable "output_s3_prefix" {
+  description = "Prefix in s3_bucket_name where the labeling job writes its output."
+  type        = string
+  default     = "output/"
 }
 
 variable "private_workteam_arn" {
@@ -35,23 +53,6 @@ variable "entity_labels" {
   description = "Entity label set presented to workers and passed to the pre-annotation Lambda. OFAC categories from the upstream Comprehend recognizer."
   type        = list(string)
   default     = ["OFAC_ORG", "OFAC_POI", "FTO"]
-}
-
-variable "consolidation_mode" {
-  description = "Which post-annotation Lambda drives the job: 'single' or 'merge'. Both are deployed."
-  type        = string
-  default     = "single"
-
-  validation {
-    condition     = contains(["single", "merge"], var.consolidation_mode)
-    error_message = "consolidation_mode must be either 'single' or 'merge'."
-  }
-}
-
-variable "number_of_human_workers_per_object" {
-  description = "Workers per dataset object. Use 1 with 'single', >1 with 'merge'."
-  type        = number
-  default     = 1
 }
 
 variable "task_title" {

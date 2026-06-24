@@ -1,0 +1,32 @@
+{
+  "LabelingJobName": "${labeling_job_name}",
+  "LabelAttributeName": "${label_attribute_name}",
+  "InputConfig": {
+    "DataSource": {
+      "S3DataSource": {
+        "ManifestS3Uri": "${manifest_s3_uri}"
+      }
+    }
+  },
+  "OutputConfig": {
+    "S3OutputPath": "${output_s3_uri}"
+  },
+  "RoleArn": "${role_arn}",
+  "HumanTaskConfig": {
+    "WorkteamArn": "${workteam_arn}",
+    "UiConfig": {
+      "UiTemplateS3Uri": "${ui_template_s3_uri}"
+    },
+    "PreHumanTaskLambdaArn": "${pre_lambda_arn}",
+    "TaskKeywords": ["named entity recognition", "NER", "OFAC"],
+    "TaskTitle": "${task_title}",
+    "TaskDescription": "${task_description}",
+    "NumberOfHumanWorkersPerDataObject": 1,
+    "TaskTimeLimitInSeconds": ${task_time_limit_seconds},
+    "TaskAvailabilityLifetimeInSeconds": ${task_availability_lifetime_seconds},
+    "MaxConcurrentTaskCount": 1000,
+    "AnnotationConsolidationConfig": {
+      "AnnotationConsolidationLambdaArn": "${post_lambda_arn}"
+    }
+  }
+}

@@ -23,6 +23,7 @@ def _load(name, relpath):
 pre = _load("pre_handler", "lambdas/pre_annotation/handler.py")
 post_single = _load("post_single_handler", "lambdas/post_annotation_single/handler.py")
 comprehend = _load("comprehend_handler", "lambdas/comprehend_to_manifest/handler.py")
+launcher = _load("launcher_handler", "lambdas/launch_labeling_job/handler.py")
 
 
 def _worker(worker_id, entities):
@@ -186,6 +187,61 @@ def test_comprehend_resolve_location_event_shapes():
     eb_evt = {"detail": {"bucket": {"name": "b2"}, "object": {"key": "out/output.tar.gz"}}}
     assert comprehend._resolve_output_location(eb_evt) == ("b2", "out/output.tar.gz")
     assert comprehend._resolve_output_location({"output_s3_uri": "s3://b3/k/output.tar.gz"}) == ("b3", "k/output.tar.gz")
+
+
+def test_launch_labeling_job_builds_request():
+    env = {
+        "ROLE_ARN": "arn:aws:iam::111122223333:role/usdc-ner-gt-execution-role",
+        "WORKTEAM_ARN": "arn:aws:sagemaker:us-east-1:111122223333:workteam/private-crowd/team",
+        "PRE_LAMBDA_ARN": "arn:aws:lambda:us-east-1:111122223333:function:usdc-ner-SageMaker-pre-annotation",
+        "POST_LAMBDA_ARN": "arn:aws:lambda:us-east-1:111122223333:function:usdc-ner-SageMaker-post-single",
+        "MANIFEST_S3_URI": "s3://gt-bucket/input/input.manifest",
+        "UI_TEMPLATE_S3_URI": "s3://gt-bucket/templates/ner-template.liquid.html",
+        "OUTPUT_S3_URI": "s3://gt-bucket/output/",
+        "JOB_NAME_PREFIX": "usdc-ner",
+        "MAX_CONCURRENT_TASK_COUNT": "250",
+        "WORKERS_PER_OBJECT": "1",
+        "TASK_KEYWORDS": json.dumps(["NER", "OFAC"]),
+    }
+    captured = {}
+    launcher._create_job = lambda request: captured.update(request=request) or {}  # type: ignore
+
+    os.environ.update(env)
+    try:
+        # A manifest-landed EventBridge event; config comes from env, not the event.
+        evt = {"detail": {"bucket": {"name": "gt-bucket"}, "object": {"key": "input/input.manifest"}}}
+        out = launcher.lambda_handler(evt, None)
+    finally:
+        for k in env:
+            os.environ.pop(k, None)
+
+    req = captured["request"]
+    assert out["labeling_job_name"].startswith("usdc-ner-")
+    assert req["LabelingJobName"] == out["labeling_job_name"]
+    assert req["RoleArn"] == env["ROLE_ARN"]
+    assert req["LabelAttributeName"] == "ner-labels"  # default
+    assert req["InputConfig"]["DataSource"]["S3DataSource"]["ManifestS3Uri"] == env["MANIFEST_S3_URI"]
+    assert req["OutputConfig"]["S3OutputPath"] == env["OUTPUT_S3_URI"]
+    htc = req["HumanTaskConfig"]
+    assert htc["WorkteamArn"] == env["WORKTEAM_ARN"]
+    assert htc["UiConfig"]["UiTemplateS3Uri"] == env["UI_TEMPLATE_S3_URI"]
+    assert htc["PreHumanTaskLambdaArn"] == env["PRE_LAMBDA_ARN"]
+    assert htc["AnnotationConsolidationConfig"]["AnnotationConsolidationLambdaArn"] == env["POST_LAMBDA_ARN"]
+    assert htc["TaskKeywords"] == ["NER", "OFAC"]
+    assert htc["NumberOfHumanWorkersPerDataObject"] == 1
+    assert htc["MaxConcurrentTaskCount"] == 250  # from env, as int
+    assert htc["TaskTimeLimitInSeconds"] == 3600  # default, as int
+
+
+def test_launch_labeling_job_requires_config():
+    # Missing required env vars must fail fast rather than create a bad job.
+    launcher._create_job = lambda request: (_ for _ in ()).throw(AssertionError("should not be called"))  # type: ignore
+    raised = False
+    try:
+        launcher.build_create_labeling_job_request("usdc-ner-test")
+    except KeyError:
+        raised = True
+    assert raised
 
 
 def _run_all():

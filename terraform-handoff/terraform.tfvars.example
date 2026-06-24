@@ -1,0 +1,48 @@
+# =============================================================================
+# Copy to terraform.tfvars and fill in your values. This is the ONLY file you
+# need to edit. Everything else is variable-driven with defaults in variables.tf.
+#
+# An admin runs `terraform apply` once. After that the pipeline is automatic:
+#   Comprehend output.tar.gz  ->  manifest  ->  Ground Truth labeling job.
+# =============================================================================
+
+aws_region   = "us-east-1"
+project_name = "usdc-ner"
+
+# --- REQUIRED ----------------------------------------------------------------
+
+# Existing bucket. NOT created here. It must have EventBridge notifications
+# enabled (see README). The UI template is uploaded into it; the Comprehend
+# output.tar.gz lands in it; the manifest + job output are written to it.
+s3_bucket_name = "my-existing-groundtruth-bucket"
+
+# Existing private workteam ARN (created once in the SageMaker / Ground Truth console).
+private_workteam_arn = "arn:aws:sagemaker:us-east-1:111122223333:workteam/private-crowd/my-team"
+
+# S3 prefix of the ORIGINAL documents Comprehend analyzed. Joined with each
+# Comprehend `File` to build the manifest `source-ref` the pre-Lambda fetches.
+source_docs_s3_base = "s3://my-existing-groundtruth-bucket/docs/"
+
+# --- COMMON OPTIONAL (defaults shown) ----------------------------------------
+
+manifest_s3_key    = "input/input.manifest"
+ui_template_s3_key = "templates/ner-template.liquid.html"
+output_s3_prefix   = "output/"
+
+label_attribute_name = "ner-labels"
+entity_labels        = ["OFAC_ORG", "OFAC_POI", "FTO"]
+# min_score          = "0.5"   # drop low-confidence Comprehend entities (default: keep all)
+
+# Where Comprehend writes output.tar.gz. Match by suffix (default) and optionally
+# narrow to a key prefix to avoid matching unrelated tarballs.
+comprehend_output_suffix     = "output.tar.gz"
+# comprehend_output_key_prefix = "comprehend-output/"
+
+# Upload the local Crowd-HTML template (../ui/ner-template.liquid.html) for you.
+# Set false if you manage the template object yourself.
+upload_ui_template = true
+
+# Enable EventBridge ON THE BUCKET from this stack. This is AUTHORITATIVE and
+# OVERWRITES other notification config on the bucket -- leave false and enable
+# EventBridge on the bucket out-of-band unless this stack owns notifications.
+manage_bucket_eventbridge = false

@@ -33,8 +33,13 @@ label_attribute_name = "ner-labels"
 entity_labels        = ["OFAC_ORG", "OFAC_POI", "FTO"]
 # min_score          = "0.5"   # drop low-confidence Comprehend entities (default: keep all)
 
-# Where Comprehend writes output.tar.gz. Match by suffix (default) and optionally
-# narrow to a key prefix to avoid matching unrelated tarballs.
+# Where Comprehend writes output.tar.gz. The async job writes to a per-run path:
+#   <OutputDataConfig base>/<MODEL-ID>-NER-<JOB-ID>/output/output.tar.gz
+# The <...>-NER-<JOB-ID> segment changes every run, so the trigger matches by the
+# invariant SUFFIX (default below). To scope it to just the Comprehend output area,
+# set comprehend_output_key_prefix to the STABLE base (the part before -NER-); the
+# rule then becomes a wildcard "<prefix>*output.tar.gz" that tolerates the dynamic
+# middle. Leave the prefix empty to match output.tar.gz anywhere in the bucket.
 comprehend_output_suffix     = "output.tar.gz"
 # comprehend_output_key_prefix = "comprehend-output/"
 

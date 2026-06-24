@@ -84,6 +84,23 @@ terraform output labeling_jobs_console_url
 | `task_*`, `max_concurrent_task_count`, `workers_per_object` | Job task settings | see `variables.tf` |
 | `lambda_runtime`, `*_timeout_seconds`, `converter_lambda_memory_mb` | Lambda knobs | see `variables.tf` |
 
+## Comprehend output path
+
+The Comprehend async job writes to a **per-run** key:
+
+```
+<OutputDataConfig base>/<MODEL-ID>-NER-<JOB-ID>/output/output.tar.gz
+```
+
+The `<MODEL-ID>-NER-<JOB-ID>` segment changes every run, so the converter trigger
+matches by the **invariant suffix** `output.tar.gz` (not an exact key). That works
+out of the box. To scope the trigger to just the Comprehend output area, set
+`comprehend_output_key_prefix` to the **stable base** (the part before `-NER-`):
+the rule becomes a wildcard `"<prefix>*output.tar.gz"` that tolerates the dynamic
+middle. The converter downloads whatever key actually fired, so the nested path is
+handled automatically; `source-ref` is built from the `File` field inside the
+tarball, independent of where the tarball lives.
+
 ## Notes
 
 - **Re-runs:** drop a new `output.tar.gz` (or re-run Comprehend) → a fresh job. The

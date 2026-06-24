@@ -251,6 +251,14 @@ the GT input manifest (to `s3_bucket_name` / `manifest_s3_key`). All of this is
 **`count`-gated** — when the variable is empty (default), none of it is created and
 the core stack is untouched.
 
+This Lambda is a **one-shot batch** step: one invoke parses the whole
+`output.tar.gz` and writes the *complete* manifest in a single `PutObject` (nothing
+per-case). Launching the labeling job stays a **separate, deliberate step**
+(`terraform apply` / boto3 launcher) so you can review the manifest first — the
+**per-case fan-out is Ground Truth's job at runtime**, where it invokes the
+pre-annotation Lambda once per manifest record. Convert and launch are intentionally
+decoupled.
+
 Relevant variables:
 
 | Variable | Purpose | Default |

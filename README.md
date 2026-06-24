@@ -268,6 +268,16 @@ shapes are handled). Configured via env vars: `SOURCE_DOCS_S3_BASE` (the
 `--s3-docs-base` equivalent), `MANIFEST_S3_BUCKET` / `MANIFEST_S3_KEY`,
 `ENTITY_LABELS`, optional `MIN_SCORE`.
 
+**This is a one-shot batch step, not per-case.** A single invoke parses the
+*entire* `output.tar.gz` (every document), builds *every* manifest record, and
+writes the *complete* `input/input.manifest` in one `PutObject` — it never touches
+cases individually. Launching the labeling job is then a **deliberate, separate
+step** (`terraform apply` / the boto3 launcher) so you can review the finished
+manifest first. The **per-case fan-out happens inside Ground Truth at job runtime**:
+GT reads the manifest and invokes the pre-annotation Lambda **once per record**, so
+each case flows individually through pre-annotation → UI → consolidation. So the
+flow is: batch convert → review → launch → GT fans out per-case.
+
 Manual invoke:
 
 ```bash

@@ -48,37 +48,39 @@ input/input.manifest   (one JSON record per line)
         ▼
 ┌─────────────────────────────────────────────┐
 │ PRE-annotation Lambda    (per data object)   │  lambdas/pre_annotation/handler.py
-│   text         ← source / source-ref         │
-│   labels       ← record `labels` config/env  │
-│   initialValue ← `initialEntities`           │
-│   ofacMetadata ← `ofac_metadata`             │
+│   text            ← source / source-ref      │
+│   labels          ← record `labels` config/env
+│   initialEntities ← `initialEntities`        │
+│   metaData        ← `metaData`               │
 │   → { taskInput, isHumanAnnotationRequired } │
 └─────────────────────────────────────────────┘
         │ taskInput
         ▼
 ┌─────────────────────────────────────────────┐
 │ Worker UI       ui/ner-template.liquid.html  │
-│   highlight + label spans; entity-list panel │
-│   NEW span → OFAC modal prompts for an ID    │
-│   hidden `ofacOverrides` field ← entered IDs │
-│   → submits { annotatedResult, ofacOverrides}│
+│   highlight/label spans; add & remove freely │
+│   click an entity's OFAC ID to set/edit it   │
+│   hidden `metaData` field ← confidence+ofacID│
+│   → submits { annotatedResult, metaData }    │
 └─────────────────────────────────────────────┘
         │ all workers' annotations (S3 payload)
         ▼
 ┌─────────────────────────────────────────────┐
 │ POST-annotation Lambda   (consolidation)     │
 │   single-worker pass-through;                │  lambdas/post_annotation_single
-│   entered OFAC IDs win / are re-attached     │
+│   emits entities + metaData (drops "FILL")   │
 └─────────────────────────────────────────────┘
         │
         ▼
-output/   output manifest — training data; entities carry `ofacId`
+output/   output manifest — entities + metaData (confidence; ofacID where set)
 ```
 
-**OFAC ID flow:** the pre-Lambda seeds known IDs from the manifest; the UI prompts
-for an ID whenever a worker labels a *new* span and submits it in the hidden
-`ofacOverrides` field; the post-Lambda writes that ID onto the output entity's
-`ofacId`. So manually-tagged spans persist into the output/training data.
+**OFAC ID flow:** the manifest seeds each detected span with a `metaData` record
+carrying its model `confidence` and a placeholder `ofacID` of `"FILL"`. In the UI
+the annotator adds/removes spans freely and clicks any entity to enter/edit its
+OFAC ID; the current `metaData` (confidence + entered IDs) rides back in a hidden
+field. The post-Lambda emits a parallel `metaData` array, keeping each annotator-set
+`ofacID` and **dropping any span still left as `"FILL"`**.
 
 ### Who does what
 
@@ -121,21 +123,23 @@ Invoked **once per data object** before rendering. It:
    `dataObject.source-ref` from S3.
 2. Resolves the entity **label set** from the record's `labels` config
    (falling back to the `ENTITY_LABELS` env var / built-in defaults).
-3. Passes through the **OFAC metadata** embedded in the manifest record
-   (`ofac_metadata`, default `[]` — empty for analysis jobs, populated for
-   training) and the seed spans (`initialEntities`, default `[]`).
-4. Returns the `taskInput` the template binds to (the manifest's
-   `initialEntities`/`ofac_metadata` map to the template's existing
-   `initialValue`/`ofacMetadata` keys):
+3. Passes through the two **parallel** per-span arrays from the manifest record:
+   the seed spans (`initialEntities`, default `[]`) and their `metaData` (default
+   `[]`) carrying `confidence` + a placeholder `ofacID` of `"FILL"`.
+4. Returns the `taskInput` the template binds to. The manifest keys
+   `initialEntities`/`metaData` pass straight through under the same names (no
+   legacy variants):
 
 ```json
 {
   "taskInput": {
     "taskObject": "<document text>",
     "labels": [{ "label": "OFAC_ORG" }, { "label": "OFAC_POI" }, { "label": "FTO" }],
-    "initialValue": [],
-    "ofacMetadata": [
-      { "startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "OFAC_ORG" }
+    "initialEntities": [
+      { "startOffset": 0, "endOffset": 9, "label": "OFAC_ORG" }
+    ],
+    "metaData": [
+      { "startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "FILL" }
     ]
   },
   "isHumanAnnotationRequired": "true"
@@ -144,45 +148,56 @@ Invoked **once per data object** before rendering. It:
 
 ### Post-annotation Lambda — single-worker consolidation
 `lambdas/post_annotation_single/handler.py` reads the consolidation payload from S3
-and emits `consolidatedAnnotation.content[labelAttributeName].entities`.
+and emits `consolidatedAnnotation.content[labelAttributeName]` with two parallel
+arrays: **`entities`** (the worker's spans) and **`metaData`**.
 
-It passes the one worker's entity spans straight through, attaching each span's
-`ofacId` by `startOffset`. An OFAC ID the annotator typed in the UI modal
-(submitted via the hidden `ofacOverrides` field) **wins** over the manifest seed
-and is the only source for a brand-new span the manifest never knew about.
+For each worker span it builds a `metaData` record `{startOffset, endOffset,
+confidence[, ofacID]}`. `confidence` comes from the worker-submitted `metaData`
+(falling back to the manifest seed). `ofacID` is included **only when the annotator
+entered a real value** — a span left as the `"FILL"` placeholder has its `ofacID`
+dropped. Spans the annotator added (no model score) carry `confidence: null`.
 
 > A multi-worker merge/vote consolidator is intentionally out of scope for now; the
 > workflow runs with one worker per object.
 
-> **Annotator-entered OFAC IDs reach the output.** When a worker labels a new entity,
-> the UI prompts for an OFAC ID and submits it in a hidden `ofacOverrides` form field.
-> Consolidation writes that ID onto the output entity's `ofacId`, so manually-tagged
-> spans become part of the training data we keep. OFAC overrides are keyed by
-> `startOffset` (consistent with the rest of the pipeline); if a worker edits a span's
-> boundary *after* entering an ID, the override won't re-key to the new offset.
+> **Annotator-entered OFAC IDs reach the output.** The UI submits the current
+> `metaData` (seed confidence + any entered/edited `ofacID`) in a hidden `metaData`
+> form field, keyed by `startOffset`. Consolidation carries real `ofacID`s into the
+> output `metaData` so manually-tagged spans persist into the data we keep; if a
+> worker edits a span's boundary *after* entering an ID, the record won't re-key to
+> the new offset.
 
 ---
 
 ## The custom UI template
 
-`ui/ner-template.liquid.html` is a `<crowd-entity-annotation>` NER UI with:
+`ui/ner-template.liquid.html` is a `<crowd-entity-annotation>` NER UI inside a
+`<crowd-form>`, with a right-hand entity panel and an OFAC-ID editor. The worker:
 
-- a right-hand **entity list panel** (click to scroll/flash the span in the doc),
-- an **OFAC ID modal** that prompts for an OFAC ID when a new, unknown entity is added, and
-- a hidden `ofacOverrides` form field (inside `<crowd-form>`) that carries the
-  entered OFAC IDs into the submitted annotation so consolidation can persist them.
+- **highlights and labels** entity spans with the configured label set, and can
+  **add new spans or remove existing ones freely** (no forced prompts);
+- sees a **right-hand entity list panel** — one card per span showing the text, its
+  label, offsets, model `confidence`, and current OFAC ID. Clicking the span text
+  scrolls to and flashes that span in the document;
+- **clicks an entity's OFAC ID (or "edit")** to open a small modal and enter/edit
+  the ID (pre-filled with the current value; `"FILL"` means not yet set and is shown
+  highlighted). Leaving it blank keeps the `"FILL"` placeholder.
 
 It binds to four task inputs supplied by the pre-annotation Lambda:
 
-| Binding                    | Source                                  |
-|----------------------------|------------------------------------------|
-| `task.input.taskObject`    | document text (`source`)                 |
-| `task.input.labels`        | entity label set (record `labels` config) |
-| `task.input.initialValue`  | seed spans, from `initialEntities` (may be `[]`) |
-| `task.input.ofacMetadata`  | per-span OFAC records, from `ofac_metadata` (`ofacId` by offset) |
+| Binding                       | Source                                            |
+|-------------------------------|---------------------------------------------------|
+| `task.input.taskObject`       | document text (`source`)                          |
+| `task.input.labels`           | entity label set (record `labels` config)         |
+| `task.input.initialEntities`  | seed spans `{startOffset, endOffset, label}` (may be `[]`) |
+| `task.input.metaData`         | per-span `{startOffset, endOffset, confidence, ofacID}` (parallel to the spans) |
 
-On submit, the worker's annotation includes both `annotatedResult` (the labeled
-entities) and `ofacOverrides` (the OFAC IDs entered in the modal, keyed by offset).
+A JS `metaMap` (keyed by `startOffset`) holds the live per-span metadata, seeded
+from `task.input.metaData`. On every change it is **reconciled** with the current
+spans — new spans get a placeholder record (`confidence: null`, `ofacID: "FILL"`),
+removed spans are dropped — and serialized into a hidden `metaData` form field. On
+submit, the annotation carries both `annotatedResult` (the labeled spans) and
+`metaData` (confidence + entered OFAC IDs, keyed by offset).
 
 > Note: the original template was provided pre-truncated; the missing
 > `<crowd-form>`/`<crowd-entity-annotation>` element, opening `<script>`, and
@@ -198,26 +213,25 @@ record has the shape:
 ```json
 {"source": "Acme Corp wired funds to a flagged account in Tehran last March.",
  "labels": {"labels": [{"label": "PERSON"}, {"label": "ORG"}, {"label": "LOC"}, {"label": "SANCTIONED_ENTITY"}]},
- "initialEntities": [{"label": "ORG", "startOffset": 0, "endOffset": 9}],
- "ofac_metadata": [{"startOffset": 0, "endOffset": 9, "ofacId": "SDN-12345", "label": "ORG"}]}
+ "initialEntities": [{"startOffset": 0, "endOffset": 9, "label": "ORG"}],
+ "metaData": [{"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "FILL"}]}
 ```
 
 | Field            | Meaning                                                                 |
 |------------------|-------------------------------------------------------------------------|
 | `source`         | the document text to annotate (or use `source-ref` for an S3 URI)        |
 | `labels`         | the entity label-set config for the record (`{"labels": [{"label": …}]}`) |
-| `initialEntities`| seed entity spans shown to the worker (may be `[]` only when `ofac_metadata` is also empty) |
-| `ofac_metadata`  | per-span OFAC records — **empty `[]` for incoming analysis jobs, pre-populated for training jobs** |
+| `initialEntities`| seed entity spans `{startOffset, endOffset, label}` shown to the worker (may be `[]`) |
+| `metaData`       | per-span `{startOffset, endOffset, confidence, ofacID}`, **parallel** to `initialEntities`; `confidence` is the model score and `ofacID` is the `"FILL"` placeholder the annotator replaces |
 
-> **Invariant:** `initialEntities` is never empty while `ofac_metadata` is
-> populated — every OFAC-flagged span is pre-seeded as an initial entity so the
-> worker starts from the known sanctioned spans. Both are empty together for an
-> incoming analysis job.
+> **Invariant:** `initialEntities` and `metaData` are parallel and aligned by
+> offset — one `metaData` entry per seed span. Both are empty together for a
+> document with no detected entities.
 
-`labels`, `initialEntities`, and `ofac_metadata` are optional; sensible defaults
-apply when omitted. The legacy field names `initialValue`/`ofacMetadata` are
-still accepted. For large documents you may use
-`{"source-ref": "s3://bucket/key.txt"}` instead of inline `source`.
+`labels`, `initialEntities`, and `metaData` are optional; sensible defaults apply
+when omitted. Only these field names are accepted (no legacy variants). For large
+documents you may use `{"source-ref": "s3://bucket/key.txt"}` instead of inline
+`source`.
 
 ### From AWS Comprehend output
 
@@ -247,13 +261,16 @@ record:
 - **`initialEntities`** = each kept entity's `BeginOffset`/`EndOffset`/`Type` →
   `startOffset`/`endOffset`/`label`. Only the OFAC types (`OFAC_ORG`, `OFAC_POI`,
   `FTO`) are kept; `--min-score` optionally drops low-confidence spans;
-- **`ofac_metadata`** = `[]` — this is an incoming **analysis** job; the human
-  reviewer confirms the seeded spans and adds OFAC IDs in the UI (which then flow to
-  the output via `ofacOverrides`).
+- **`metaData`** = one record per kept entity, **parallel** to `initialEntities`:
+  `{startOffset, endOffset, confidence, ofacID}`, where `confidence` is the
+  Comprehend `Score` and `ofacID` is the `"FILL"` placeholder. This is an incoming
+  **analysis** job (no pre-existing OFAC IDs); the reviewer confirms spans and fills
+  the IDs in the UI.
 
 Documents with **no detected entities** (`Entities: []`, null, or everything filtered
-out) are still included — as records with `initialEntities: []` — so a reviewer labels
-them from scratch and Comprehend false negatives aren't silently dropped.
+out) are still included — as records with `initialEntities: []` and `metaData: []` —
+so a reviewer labels them from scratch and Comprehend false negatives aren't silently
+dropped.
 
 The result is the same JSON-Lines manifest described above, so the rest of the
 pipeline is unchanged.

@@ -29,9 +29,9 @@ def build_task_input(data_object, labels=None, source_ref_reader=None):
     Args:
         data_object: a manifest record, e.g.
             {"source": "...", "labels": {"labels": [...]},
-             "initialEntities": [...], "ofac_metadata": [...]}
-            or {"source-ref": "s3://...", ...}. The legacy field names
-            ``initialValue``/``ofacMetadata`` are still accepted.
+             "initialEntities": [...], "metaData": [...]}
+            or {"source-ref": "s3://...", ...}. Only `initialEntities`/`metaData`
+            are accepted (no legacy field-name variants).
         labels: explicit override for the entity label set; when omitted the
             per-record ``labels`` config is used, else DEFAULT_LABELS.
         source_ref_reader: optional callable(s3_uri) -> str, used only when the
@@ -49,17 +49,9 @@ def build_task_input(data_object, labels=None, source_ref_reader=None):
     else:
         raise KeyError("dataObject must contain either 'source' or 'source-ref'")
 
-    initial = data_object.get("initialEntities")
-    if initial is None:
-        initial = data_object.get("initialValue")
-
-    ofac = data_object.get("ofac_metadata")
-    if ofac is None:
-        ofac = data_object.get("ofacMetadata")
-
     return {
         "taskObject": text.rstrip(),
         "labels": labels,
-        "initialValue": initial or [],
-        "ofacMetadata": ofac or [],
+        "initialEntities": data_object.get("initialEntities") or [],
+        "metaData": data_object.get("metaData") or [],
     }

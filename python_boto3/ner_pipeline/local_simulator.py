@@ -33,10 +33,17 @@ def build_consolidation_input(records, worker_answers):
     """
     dataset_objects = []
     for i, (record, answers) in enumerate(zip(records, worker_answers)):
+        # The UI submits the entity spans AND a hidden `metaData` field (seeded from
+        # the record's metaData, then edited). We seed it from the record so the
+        # confidence flows through; ofacID stays the "FILL" placeholder.
+        record_meta = record.get("metaData", [])
         annotations = [
             {
                 "workerId": f"worker-{w}",
-                "annotationData": {"content": json.dumps({"annotatedResult": {"entities": ents}})},
+                "annotationData": {"content": json.dumps({
+                    "annotatedResult": {"entities": ents},
+                    "metaData": json.dumps(record_meta),
+                })},
             }
             for w, ents in enumerate(answers)
         ]

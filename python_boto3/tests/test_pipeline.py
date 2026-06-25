@@ -22,24 +22,25 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
 # --- pre-annotation --------------------------------------------------------
-def test_build_task_input_inline_and_ofac():
+def test_build_task_input_inline_and_metadata():
     ti = build_task_input({
         "source": "Acme Corp ",
         "labels": {"labels": [{"label": "PERSON"}, {"label": "ORG"}]},
-        "initialEntities": [],
-        "ofac_metadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}],
+        "initialEntities": [{"startOffset": 0, "endOffset": 4, "label": "ORG"}],
+        "metaData": [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "FILL"}],
     })
     assert ti["taskObject"] == "Acme Corp"          # rstripped
-    assert ti["ofacMetadata"][0]["ofacId"] == "SDN-1"
-    assert ti["initialValue"] == []
+    assert ti["metaData"][0]["confidence"] == 0.99
+    assert ti["metaData"][0]["ofacID"] == "FILL"
+    assert ti["initialEntities"][0]["label"] == "ORG"
     assert {"label": "ORG"} in ti["labels"]         # per-record label config
 
 
-def test_build_task_input_accepts_legacy_field_names():
+def test_build_task_input_ignores_legacy_field_names():
     ti = build_task_input({"source": "x", "ofacMetadata": [{"startOffset": 0, "endOffset": 1, "ofacId": "SDN-9"}],
                            "initialValue": [{"label": "ORG", "startOffset": 0, "endOffset": 1}]})
-    assert ti["ofacMetadata"][0]["ofacId"] == "SDN-9"
-    assert ti["initialValue"][0]["label"] == "ORG"
+    assert ti["metaData"] == []
+    assert ti["initialEntities"] == []
 
 
 def test_build_task_input_source_ref_uses_reader():
@@ -65,11 +66,14 @@ def test_comprehend_maps_offsets_labels_and_drops_unknown_types():
     assert rec["source-ref"] == "s3://bucket/docs/doc1.txt"
     # OFAC types kept and mapped; DATE dropped.
     assert rec["initialEntities"] == [
-        {"label": "OFAC_ORG", "startOffset": 0, "endOffset": 9},
-        {"label": "FTO", "startOffset": 46, "endOffset": 52},
+        {"startOffset": 0, "endOffset": 9, "label": "OFAC_ORG"},
+        {"startOffset": 46, "endOffset": 52, "label": "FTO"},
     ]
-    # Analysis job: no OFAC IDs yet; humans add them in the UI.
-    assert rec["ofac_metadata"] == []
+    # Parallel metaData: confidence from Score, ofacID placeholder for the annotator.
+    assert rec["metaData"] == [
+        {"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "FILL"},
+        {"startOffset": 46, "endOffset": 52, "confidence": 0.97, "ofacID": "FILL"},
+    ]
     assert rec["labels"] == {"labels": [{"label": l} for l in OFAC_LABELS]}
 
 
@@ -109,8 +113,8 @@ def test_comprehend_record_round_trips_through_build_task_input():
     ti = build_task_input(rec, source_ref_reader=lambda uri: "Acme Corp wired funds to Tehran.")
     assert ti["taskObject"] == "Acme Corp wired funds to Tehran."
     assert ti["labels"] == [{"label": l} for l in OFAC_LABELS]
-    assert ti["initialValue"] == rec["initialEntities"]
-    assert ti["ofacMetadata"] == []
+    assert ti["initialEntities"] == rec["initialEntities"]
+    assert ti["metaData"] == rec["metaData"]
 
 
 def test_comprehend_no_entities_included_with_empty_seeds():
@@ -122,11 +126,11 @@ def test_comprehend_no_entities_included_with_empty_seeds():
         rec = comprehend_doc_to_record(doc, "s3://bucket/docs/")
         assert rec["source-ref"] == "s3://bucket/docs/d.txt"
         assert rec["initialEntities"] == []
-        assert rec["ofac_metadata"] == []
+        assert rec["metaData"] == []
         assert rec["labels"] == {"labels": [{"label": l} for l in OFAC_LABELS]}
         # Still round-trips to a valid taskInput.
         ti = build_task_input(rec, source_ref_reader=lambda uri: "some doc text")
-        assert ti["initialValue"] == []
+        assert ti["initialEntities"] == []
 
 
 # --- consolidation ---------------------------------------------------------
@@ -134,38 +138,59 @@ def _worker(wid, ents):
     return {"workerId": wid, "annotationData": {"content": json.dumps({"annotatedResult": {"entities": ents}})}}
 
 
-def test_consolidate_single_reattaches_ofac():
-    objs = [{
-        "datasetObjectId": "0",
-        "dataObject": {"ofacMetadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1"}]},
-        "annotations": [_worker("w1", [{"label": "ORG", "startOffset": 0, "endOffset": 4}])],
-    }]
-    out = consolidate_single(objs, "ner-labels")
-    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
-    assert ent["ofacId"] == "SDN-1"
-
-
-def _worker_with_overrides(wid, ents, overrides):
+def _worker_with_meta(wid, ents, meta):
     return {"workerId": wid, "annotationData": {"content": json.dumps({
         "annotatedResult": {"entities": ents},
-        "ofacOverrides": json.dumps(overrides),
+        "metaData": json.dumps(meta),
     })}}
 
 
+def test_consolidate_single_outputs_metadata():
+    # Entities pass through; metaData carries confidence + the entered ofacID.
+    objs = [{
+        "datasetObjectId": "0",
+        "dataObject": {"metaData": [{"startOffset": 0, "endOffset": 4, "confidence": 0.95, "ofacID": "FILL"}]},
+        "annotations": [_worker_with_meta(
+            "w1",
+            [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
+            [{"startOffset": 0, "endOffset": 4, "confidence": 0.95, "ofacID": "OFAC_1"}],
+        )],
+    }]
+    content = consolidate_single(objs, "ner-labels")[0]["consolidatedAnnotation"]["content"]["ner-labels"]
+    assert content["entities"][0] == {"startOffset": 0, "endOffset": 4, "label": "ORG"}
+    assert content["metaData"][0]["confidence"] == 0.95
+    assert content["metaData"][0]["ofacID"] == "OFAC_1"
+
+
+def test_consolidate_single_drops_unfilled_ofac():
+    # A span left as "FILL" -> ofacID dropped from output; confidence retained.
+    objs = [{
+        "datasetObjectId": "0",
+        "dataObject": {"metaData": [{"startOffset": 0, "endOffset": 4, "confidence": 0.9, "ofacID": "FILL"}]},
+        "annotations": [_worker_with_meta(
+            "w1",
+            [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
+            [{"startOffset": 0, "endOffset": 4, "confidence": 0.9, "ofacID": "FILL"}],
+        )],
+    }]
+    meta = consolidate_single(objs, "ner-labels")[0]["consolidatedAnnotation"]["content"]["ner-labels"]["metaData"][0]
+    assert "ofacID" not in meta and meta["confidence"] == 0.9
+
+
 def test_consolidate_single_carries_entered_ofac_id():
-    # New span with no manifest OFAC record; annotator-entered ID must pass through.
+    # New span with no seed/confidence; annotator-entered ID must pass through.
     objs = [{
         "datasetObjectId": "0",
         "dataObject": {},
-        "annotations": [_worker_with_overrides(
+        "annotations": [_worker_with_meta(
             "w1",
             [{"label": "ORG", "startOffset": 70, "endOffset": 78}],
-            [{"startOffset": 70, "endOffset": 78, "ofacId": "SDN-NEW"}],
+            [{"startOffset": 70, "endOffset": 78, "confidence": None, "ofacID": "OFAC_NEW"}],
         )],
     }]
-    out = consolidate_single(objs, "ner-labels")
-    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
-    assert ent["ofacId"] == "SDN-NEW"
+    meta = consolidate_single(objs, "ner-labels")[0]["consolidatedAnnotation"]["content"]["ner-labels"]["metaData"][0]
+    assert meta["ofacID"] == "OFAC_NEW"
+    assert meta["confidence"] is None
 
 
 # --- local simulator (uses the real shared manifest) -----------------------
@@ -175,9 +200,12 @@ def test_simulate_end_to_end_single():
         answers = json.load(f)
     report = simulate(records, answers)
     assert len(report["consolidated"]) == len(records)
-    # First doc: ORG@0-9 should carry the manifest's OFAC id.
-    first = report["consolidated"][0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
-    assert any(e.get("ofacId") == "SDN-12345" for e in first)
+    # First doc: ORG@0-9 passes through; its metaData carries the seeded confidence
+    # (ofacID stays FILL in the simulator -> dropped from output).
+    first = report["consolidated"][0]["consolidatedAnnotation"]["content"]["ner-labels"]
+    assert first["entities"][0] == {"startOffset": 0, "endOffset": 9, "label": "ORG"}
+    assert first["metaData"][0]["confidence"] == 0.99
+    assert "ofacID" not in first["metaData"][0]
 
 
 # --- aws launcher (request building + injected clients, no real AWS) -------

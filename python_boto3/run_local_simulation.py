@@ -37,7 +37,7 @@ def main():
 
     print("=== Pre-annotation taskInputs (single-worker consolidation) ===")
     for i, ti in enumerate(report["task_inputs"]):
-        print(f"[{i}] text={ti['taskObject'][:50]!r} ofac={len(ti['ofacMetadata'])} labels={ti['labels']}")
+        print(f"[{i}] text={ti['taskObject'][:50]!r} meta={len(ti['metaData'])} labels={ti['labels']}")
 
     print("\n=== Consolidated output manifest entries ===")
     print(json.dumps(report["consolidated"], indent=2))

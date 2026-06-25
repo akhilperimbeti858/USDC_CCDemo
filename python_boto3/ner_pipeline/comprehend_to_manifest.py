@@ -17,21 +17,22 @@ This module turns that into the JSON-Lines manifest the rest of the pipeline alr
 consumes (one record per line), so Ground Truth can present Comprehend's predictions
 to a human reviewer who confirms them and adds OFAC IDs.
 
-Each Comprehend document becomes one manifest record:
+Each Comprehend document becomes one manifest record with two PARALLEL arrays:
 
     {
       "source-ref":      "s3://<docs>/doc1.txt",         # text fetched at render time
       "labels":          {"labels": [{"label": "OFAC_ORG"}, ...]},
-      "initialEntities": [{"label": "OFAC_ORG", "startOffset": 0, "endOffset": 9}, ...],
-      "ofac_metadata":   []                               # analysis job; humans add IDs
+      "initialEntities": [{"startOffset": 0, "endOffset": 9, "label": "OFAC_ORG"}, ...],
+      "metaData":        [{"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "FILL"}, ...]
     }
 
-Comprehend's `BeginOffset`/`EndOffset`/`Type` map to the manifest's
-`startOffset`/`endOffset`/`label`. The recognizer is assumed to emit the OFAC types
-directly; entities of any other type are dropped. `ofac_metadata` is always empty
-(an incoming analysis job), which keeps the manifest invariant intact.
+Comprehend's `BeginOffset`/`EndOffset`/`Type` map to `startOffset`/`endOffset`/`label`;
+each entity's `Score` becomes the parallel `metaData.confidence`, with a placeholder
+`ofacID` of "FILL" that the human annotator replaces in the UI. The recognizer is
+assumed to emit the OFAC types directly; entities of any other type are dropped.
 
-Pure and AWS-free so it is unit-testable and runnable offline.
+Pure and AWS-free so it is unit-testable and runnable offline. Mirrors the deployed
+``lambdas/comprehend_to_manifest/handler.py``.
 """
 
 import json
@@ -93,23 +94,31 @@ def comprehend_doc_to_record(doc, s3_docs_base, allowed_types=None,
     allowed_set = set(allowed)
 
     initial_entities = []
+    meta_data = []
     # `or []` handles docs with no detections: "Entities": [], null, or a missing key.
     for ent in (doc.get("Entities") or []):
         if ent.get("Type") not in allowed_set:
             continue
         if min_score is not None and ent.get("Score", 1.0) < min_score:
             continue
+        start, end = ent["BeginOffset"], ent["EndOffset"]
         initial_entities.append({
+            "startOffset": start,
+            "endOffset": end,
             "label": ent["Type"],
-            "startOffset": ent["BeginOffset"],
-            "endOffset": ent["EndOffset"],
+        })
+        meta_data.append({
+            "startOffset": start,
+            "endOffset": end,
+            "confidence": ent.get("Score"),
+            "ofacID": "FILL",
         })
 
     return {
         "source-ref": _source_ref(s3_docs_base, doc["File"]),
         "labels": _labels_config(label_set),
         "initialEntities": initial_entities,
-        "ofac_metadata": [],
+        "metaData": meta_data,
     }
 
 

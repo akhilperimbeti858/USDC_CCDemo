@@ -28,6 +28,7 @@
       letter-spacing: 0.05em;
       margin-bottom: 8px;
     }
+    .panel-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
     .entity-list-item {
       background: #f9f9f9;
       border-radius: 6px;
@@ -35,9 +36,17 @@
       font-size: 12px;
       color: #111;
       border-left: 3px solid transparent;
+      margin-bottom: 8px;
     }
-    .entity-list-item .span-text { font-weight: 600; font-size: 13px; }
+    .entity-list-item .span-text { font-weight: 600; font-size: 13px; cursor: pointer; }
     .entity-list-item .span-meta { color: #888; margin-top: 2px; }
+    .ofac-id-line { margin-top: 6px; font-size: 12px; color: #333; }
+    .ofac-id-value {
+      cursor: pointer; font-weight: 600;
+      border-bottom: 1px dashed #999; padding-bottom: 1px;
+    }
+    .ofac-id-value.fill { color: #b45309; }     /* highlight unfilled placeholders */
+    .ofac-id-edit { color: #2563eb; margin-left: 6px; cursor: pointer; font-size: 11px; }
 
     #ofac-modal {
       display: none;
@@ -72,10 +81,10 @@
 
 <!--
   Bindings supplied by the pre-annotation Lambda's taskInput:
-    task.input.taskObject   -> raw document text
-    task.input.labels       -> JSON array of entity labels (strings or {label,...})
-    task.input.initialValue -> JSON array of seed entity spans (may be [])
-    task.input.ofacMetadata -> JSON array of { startOffset, endOffset, ofacId, label }
+    task.input.taskObject      -> raw document text
+    task.input.labels          -> JSON array of entity labels (strings or {label,...})
+    task.input.initialEntities -> JSON array of seed spans { startOffset, endOffset, label } (may be [])
+    task.input.metaData        -> JSON array of { startOffset, endOffset, confidence, ofacID } (parallel to initialEntities)
 -->
 
 <crowd-form>
@@ -83,29 +92,30 @@
     <div class="crowd-container">
       <crowd-entity-annotation
         name="annotatedResult"
-        header="Highlight and label each named entity. Confirm an OFAC ID when prompted."
+        header="Highlight and label each entity. Add or remove spans freely, then click an entity's OFAC ID to set it."
         labels="{{ task.input.labels | to_json }}"
         text="{{ task.input.taskObject }}"
-        initial-value="{{ task.input.initialValue | to_json }}">
+        initial-value="{{ task.input.initialEntities | to_json }}">
       </crowd-entity-annotation>
     </div>
 
     <div class="right-panel">
       <div>
         <div class="panel-title">Entities</div>
+        <div class="panel-hint">Click an OFAC ID to enter / edit it. "FILL" means not yet set.</div>
         <div id="entity-list"></div>
       </div>
     </div>
   </div>
   <!--
-    Carries annotator-entered OFAC IDs into the submitted annotation. A crowd-form
-    serializes named inputs inside it, so the entered IDs reach the consolidation
-    Lambda (and the output/training manifest). Kept in sync with metaMap.
+    Carries the annotator-authored metaData (confidence + entered ofacID, kept in
+    sync with adds/removes/edits) into the submitted annotation. A crowd-form
+    serializes named inputs inside it, so it reaches the consolidation Lambda.
   -->
-  <input type="hidden" name="ofacOverrides" id="ofac-overrides" value="[]">
+  <input type="hidden" name="metaData" id="meta-data" value="[]">
 </crowd-form>
 
-<div id="ofac-metadata-raw" style="display:none;">{{ task.input.ofacMetadata | to_json }}</div>
+<div id="meta-data-raw" style="display:none;">{{ task.input.metaData | to_json }}</div>
 <div id="labels-raw" style="display:none;">{{ task.input.labels | to_json }}</div>
 
 <script>
@@ -121,25 +131,46 @@
     labelMap[name] = { textColor: PALETTE[i % PALETTE.length] };
   });
 
-  // --- OFAC metadata ---------------------------------------------------------
-  const ofacMetadata = JSON.parse(document.getElementById('ofac-metadata-raw').textContent);
+  const FILL = "FILL";
 
+  // --- metaData --------------------------------------------------------------
+  // Seeded from task.input.metaData: { startOffset, endOffset, confidence, ofacID }.
+  // Keyed by startOffset so it can be looked up per span and edited in place.
+  const seedMeta = JSON.parse(document.getElementById('meta-data-raw').textContent || '[]');
   const metaMap = {};
-  ofacMetadata.forEach(m => metaMap[m.startOffset] = m);
+  seedMeta.forEach(m => metaMap[m.startOffset] = m);
 
-  // Serialize the current OFAC records (manifest-seeded + annotator-entered) into
-  // the hidden form field so they are submitted with the annotation. Called once
-  // now (valid JSON from the start) and again whenever the modal adds an ID.
-  function syncOfacOverrides() {
-    const field = document.getElementById('ofac-overrides');
+  // Serialize the current metaData into the hidden form field so it is submitted
+  // with the annotation. Called on init and after every add/remove/edit.
+  function syncMetaData() {
+    const field = document.getElementById('meta-data');
     if (field) field.value = JSON.stringify(Object.values(metaMap));
   }
-  syncOfacOverrides();
+  syncMetaData();
 
-  function scrollToEntityInDoc(ann, spanText) {
+  // Bring metaMap in line with the current entity spans: add a placeholder record
+  // for any new span, drop records for removed spans. Confidence is null for
+  // human-added spans (no model score); ofacID defaults to the FILL placeholder.
+  function reconcileMeta(entities) {
+    const present = new Set(entities.map(e => e.startOffset));
+    Object.keys(metaMap).forEach(k => {
+      if (!present.has(Number(k))) delete metaMap[k];
+    });
+    entities.forEach(e => {
+      if (!(e.startOffset in metaMap)) {
+        metaMap[e.startOffset] = {
+          startOffset: e.startOffset,
+          endOffset: e.endOffset,
+          confidence: null,
+          ofacID: FILL,
+        };
+      }
+    });
+    syncMetaData();
+  }
+
+  function scrollToEntityInDoc(spanText) {
     const crowdEl = document.querySelector('crowd-entity-annotation');
-
-    // Attempt shadow DOM pierce
     try {
       const shadowRoot = crowdEl.shadowRoot;
       if (shadowRoot) {
@@ -147,7 +178,6 @@
         for (const span of allSpans) {
           if (span.textContent.trim() === spanText.trim()) {
             span.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            // Flash highlight
             const original = span.style.outline;
             span.style.outline = '2px solid #ff6600';
             setTimeout(() => span.style.outline = original, 1500);
@@ -155,9 +185,7 @@
           }
         }
       }
-    } catch(e) {}
-
-    // Fallback — scroll crowd element container into view
+    } catch (e) {}
     crowdEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -169,25 +197,38 @@
       .forEach(ann => {
         const lInfo = labelMap[ann.label] || { textColor: "#333" };
         const spanText = text.slice(ann.startOffset, ann.endOffset);
+        const meta = metaMap[ann.startOffset] || {};
+        const ofacId = meta.ofacID || FILL;
+        const conf = (meta.confidence === null || meta.confidence === undefined)
+          ? '' : ` &nbsp;·&nbsp; conf ${Number(meta.confidence).toFixed(2)}`;
+
         const item = document.createElement("div");
         item.className = "entity-list-item";
         item.style.borderLeftColor = lInfo.textColor;
-        item.style.cursor = 'pointer';
-        const meta = metaMap[ann.startOffset];
-        const idStr = meta ? ` &nbsp;·&nbsp; ${meta.ofacId}` : '';
-        item.innerHTML = `<div class="span-text">${spanText}</div>
-                          <div class="span-meta">${ann.label} &nbsp;·&nbsp; ${ann.startOffset}–${ann.endOffset}${idStr}</div>`;
-        item.addEventListener('click', () => {
-          // Flash the clicked item
+        item.innerHTML =
+          `<div class="span-text">${spanText}</div>
+           <div class="span-meta">${ann.label} &nbsp;·&nbsp; ${ann.startOffset}–${ann.endOffset}${conf}</div>
+           <div class="ofac-id-line">OFAC ID:
+             <span class="ofac-id-value${ofacId === FILL ? ' fill' : ''}">${ofacId}</span>
+             <span class="ofac-id-edit">edit</span>
+           </div>`;
+
+        // Click the span text -> scroll to it in the document.
+        item.querySelector('.span-text').addEventListener('click', () => {
           item.style.background = '#fff3cd';
           setTimeout(() => item.style.background = '#f9f9f9', 1500);
-          scrollToEntityInDoc(ann, spanText);
+          scrollToEntityInDoc(spanText);
         });
+        // Click the OFAC ID (or "edit") -> open the edit modal for this span.
+        const openEdit = (ev) => { ev.stopPropagation(); openOfacModal(ann, spanText); };
+        item.querySelector('.ofac-id-value').addEventListener('click', openEdit);
+        item.querySelector('.ofac-id-edit').addEventListener('click', openEdit);
+
         entityList.appendChild(item);
       });
   }
 
-  // Read directly from crowd element attributes — no dependency on GT runtime
+  // Initial render from the crowd element's initial-value (works without GT runtime).
   document.addEventListener('DOMContentLoaded', () => {
     const crowdEl = document.querySelector('crowd-entity-annotation');
     const text = crowdEl.getAttribute('text');
@@ -195,30 +236,28 @@
     renderEntityList(initialEntities, text);
   });
 
-  // Sync on annotator changes when running inside Ground Truth
+  // Live updates inside Ground Truth: reconcile metaData with add/remove, re-render.
   document.addEventListener('all-crowd-elements-ready', () => {
     const crowdEl = document.querySelector('crowd-entity-annotation');
     const text = crowdEl.getAttribute('text');
     crowdEl.addEventListener('change', () => {
       const updated = crowdEl.value?.entities || [];
+      reconcileMeta(updated);       // no forced prompt -- spans can be added/removed freely
       renderEntityList(updated, text);
-
-      // Prompt for an OFAC ID whenever a newly added span has no known OFAC record.
-      const newSpan = updated.find(e => !(e.startOffset in metaMap));
-      if (newSpan) {
-        const text2 = crowdEl.getAttribute('text');
-        openOfacModal(newSpan, text2.slice(newSpan.startOffset, newSpan.endOffset));
-      }
     });
   });
 
-  // --- OFAC ID modal wiring --------------------------------------------------
+  // --- OFAC ID edit modal ----------------------------------------------------
   let pendingSpan = null;
   function openOfacModal(span, spanText) {
     pendingSpan = span;
+    const meta = metaMap[span.startOffset] || {};
     document.getElementById('ofac-modal-span').textContent = spanText;
-    document.getElementById('ofac-id-input').value = '';
+    const input = document.getElementById('ofac-id-input');
+    const current = meta.ofacID && meta.ofacID !== FILL ? meta.ofacID : '';
+    input.value = current;
     document.getElementById('ofac-modal').style.display = 'block';
+    input.focus();
   }
   function closeOfacModal() {
     pendingSpan = null;
@@ -227,17 +266,20 @@
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('ofac-skip').addEventListener('click', closeOfacModal);
     document.getElementById('ofac-confirm').addEventListener('click', () => {
-      const val = document.getElementById('ofac-id-input').value.trim();
-      if (pendingSpan && val) {
-        metaMap[pendingSpan.startOffset] = {
+      if (pendingSpan) {
+        const val = document.getElementById('ofac-id-input').value.trim();
+        const rec = metaMap[pendingSpan.startOffset] || {
           startOffset: pendingSpan.startOffset,
           endOffset: pendingSpan.endOffset,
-          ofacId: val,
-          label: pendingSpan.label
+          confidence: null,
         };
-        syncOfacOverrides();  // push the entered ID into the submitted form data
+        rec.ofacID = val || FILL;   // empty resets to the FILL placeholder
+        metaMap[pendingSpan.startOffset] = rec;
+        syncMetaData();             // push the entered ID into the submitted form data
         const crowdEl = document.querySelector('crowd-entity-annotation');
-        renderEntityList(crowdEl.value?.entities || [], crowdEl.getAttribute('text'));
+        const text = crowdEl.getAttribute('text');
+        renderEntityList(crowdEl.value?.entities
+          || JSON.parse(crowdEl.getAttribute('initial-value') || '[]'), text);
       }
       closeOfacModal();
     });
@@ -245,14 +287,14 @@
 </script>
 
 
-<!-- OFAC ID Modal -->
+<!-- OFAC ID edit modal -->
 <div id="ofac-modal">
-  <p>New entity detected: <strong id="ofac-modal-span"></strong></p>
-  <p>Enter OFAC ID (optional):</p>
-  <input type="text" id="ofac-id-input" placeholder="e.g. SDN-12345" />
+  <p>Set OFAC ID for: <strong id="ofac-modal-span"></strong></p>
+  <p>Enter an OFAC ID (leave blank to keep "FILL"):</p>
+  <input type="text" id="ofac-id-input" placeholder="e.g. OFAC_1234" />
   <div id="ofac-modal-buttons">
-    <button id="ofac-skip">Skip</button>
-    <button id="ofac-confirm">Confirm</button>
+    <button id="ofac-skip">Cancel</button>
+    <button id="ofac-confirm">Save</button>
   </div>
 </div>
 

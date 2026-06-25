@@ -36,43 +36,45 @@ def _worker(worker_id, entities):
 # ---------------------------------------------------------------------------
 # Pre-annotation Lambda
 # ---------------------------------------------------------------------------
-def test_pre_inline_source_passes_through_ofac():
+def test_pre_passes_initial_entities_and_metadata():
     event = {
         "version": "2018-10-16",
         "labelingJobArn": "arn:test",
         "dataObject": {
             "source": "Acme Corp wired funds.",
             "labels": {"labels": [{"label": "PERSON"}, {"label": "ORG"}]},
-            "initialEntities": [],
-            "ofac_metadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1", "label": "ORG"}],
+            "initialEntities": [{"startOffset": 0, "endOffset": 4, "label": "ORG"}],
+            "metaData": [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "FILL"}],
         },
     }
     out = pre.lambda_handler(event, None)
     assert out["isHumanAnnotationRequired"] == "true"
     ti = out["taskInput"]
     assert ti["taskObject"] == "Acme Corp wired funds."
-    assert ti["ofacMetadata"][0]["ofacId"] == "SDN-1"
-    assert ti["initialValue"] == []
+    assert ti["metaData"][0]["confidence"] == 0.99
+    assert ti["metaData"][0]["ofacID"] == "FILL"
+    assert ti["initialEntities"][0]["label"] == "ORG"
     # Per-record label-set config is passed through to taskInput.labels.
     assert {"label": "PERSON"} in ti["labels"]
 
 
-def test_pre_defaults_ofac_to_empty():
-    # Analysis-job record: no ofac_metadata -> taskInput gets an empty array.
+def test_pre_defaults_metadata_to_empty():
+    # Record with no metaData/initialEntities -> taskInput gets empty arrays.
     out = pre.lambda_handler({"dataObject": {"source": "no metadata here"}}, None)
-    assert out["taskInput"]["ofacMetadata"] == []
+    assert out["taskInput"]["metaData"] == []
+    assert out["taskInput"]["initialEntities"] == []
 
 
-def test_pre_accepts_legacy_field_names():
-    # Legacy `ofacMetadata`/`initialValue` keys still work.
+def test_pre_ignores_legacy_field_names():
+    # Legacy `ofacMetadata`/`initialValue`/`ofac_metadata` keys are NOT honored.
     event = {"dataObject": {
         "source": "x",
         "ofacMetadata": [{"startOffset": 0, "endOffset": 1, "ofacId": "SDN-9"}],
         "initialValue": [{"label": "ORG", "startOffset": 0, "endOffset": 1}],
     }}
     ti = pre.lambda_handler(event, None)["taskInput"]
-    assert ti["ofacMetadata"][0]["ofacId"] == "SDN-9"
-    assert ti["initialValue"][0]["label"] == "ORG"
+    assert ti["metaData"] == []
+    assert ti["initialEntities"] == []
 
 
 def test_pre_falls_back_to_entity_labels_env_without_record_labels():
@@ -88,52 +90,77 @@ def test_pre_falls_back_to_entity_labels_env_without_record_labels():
 # ---------------------------------------------------------------------------
 # Post-annotation Lambda - single worker
 # ---------------------------------------------------------------------------
-def test_post_single_pass_through_and_reattach_ofac(monkeypatch=None):
-    dataset = [{
-        "datasetObjectId": "0",
-        "dataObject": {
-            "source": "Acme Corp",
-            "ofacMetadata": [{"startOffset": 0, "endOffset": 4, "ofacId": "SDN-1", "label": "ORG"}],
-        },
-        "annotations": [_worker("w1", [{"label": "ORG", "startOffset": 0, "endOffset": 4}])],
-    }]
-    post_single._read_s3_json = lambda uri: dataset  # type: ignore
-    event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
-    out = post_single.lambda_handler(event, None)
-
-    entities = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"]
-    assert entities[0]["label"] == "ORG"
-    assert entities[0]["ofacId"] == "SDN-1"  # re-attached from dataObject
-
-
-def _worker_with_overrides(worker_id, entities, overrides):
-    """Worker submission carrying a hidden-field `ofacOverrides` JSON string."""
+def _worker_with_meta(worker_id, entities, meta):
+    """Worker submission carrying the hidden-field `metaData` JSON string."""
     return {
         "workerId": worker_id,
         "annotationData": {"content": json.dumps({
             "annotatedResult": {"entities": entities},
-            "ofacOverrides": json.dumps(overrides),
+            "metaData": json.dumps(meta),
         })},
     }
 
 
-def test_post_single_new_span_carries_entered_ofac_id():
-    # Worker added a brand-new span (offset not in the manifest) and typed an OFAC
-    # ID in the modal -> it must reach the output (training data).
+def test_post_single_outputs_entities_and_metadata():
+    # Annotator entered an OFAC ID for a seeded span -> it appears in metaData,
+    # alongside the (worker- or seed-supplied) confidence.
     dataset = [{
         "datasetObjectId": "0",
-        "dataObject": {"source": "Funds routed via a new shell company offshore."},  # no ofac_metadata
-        "annotations": [_worker_with_overrides(
+        "dataObject": {
+            "source": "Acme Corp",
+            "metaData": [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "FILL"}],
+        },
+        "annotations": [_worker_with_meta(
             "w1",
-            [{"label": "ORG", "startOffset": 17, "endOffset": 35}],
-            [{"startOffset": 17, "endOffset": 35, "ofacId": "SDN-NEW", "label": "ORG"}],
+            [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
+            [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "OFAC_1234"}],
         )],
     }]
     post_single._read_s3_json = lambda uri: dataset  # type: ignore
     event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
-    out = post_single.lambda_handler(event, None)
-    ent = out[0]["consolidatedAnnotation"]["content"]["ner-labels"]["entities"][0]
-    assert ent["ofacId"] == "SDN-NEW"
+    content = post_single.lambda_handler(event, None)[0]["consolidatedAnnotation"]["content"]["ner-labels"]
+
+    assert content["entities"][0] == {"startOffset": 0, "endOffset": 4, "label": "ORG"}
+    meta = content["metaData"][0]
+    assert meta["confidence"] == 0.99
+    assert meta["ofacID"] == "OFAC_1234"
+
+
+def test_post_single_drops_unfilled_ofac():
+    # A span left as "FILL" -> ofacID is dropped from the output; confidence stays.
+    dataset = [{
+        "datasetObjectId": "0",
+        "dataObject": {"source": "Acme Corp",
+                       "metaData": [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "FILL"}]},
+        "annotations": [_worker_with_meta(
+            "w1",
+            [{"label": "ORG", "startOffset": 0, "endOffset": 4}],
+            [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "FILL"}],
+        )],
+    }]
+    post_single._read_s3_json = lambda uri: dataset  # type: ignore
+    event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
+    meta = post_single.lambda_handler(event, None)[0]["consolidatedAnnotation"]["content"]["ner-labels"]["metaData"][0]
+    assert "ofacID" not in meta and meta["confidence"] == 0.99
+
+
+def test_post_single_new_span_carries_entered_ofac_id():
+    # Worker added a brand-new span (no seed/confidence) and entered an OFAC ID ->
+    # it reaches the output with confidence null.
+    dataset = [{
+        "datasetObjectId": "0",
+        "dataObject": {"source": "Funds routed via a new shell company offshore."},  # no metaData
+        "annotations": [_worker_with_meta(
+            "w1",
+            [{"label": "ORG", "startOffset": 17, "endOffset": 35}],
+            [{"startOffset": 17, "endOffset": 35, "confidence": None, "ofacID": "OFAC_NEW"}],
+        )],
+    }]
+    post_single._read_s3_json = lambda uri: dataset  # type: ignore
+    event = {"labelAttributeName": "ner-labels", "payload": {"s3Uri": "s3://b/k"}}
+    meta = post_single.lambda_handler(event, None)[0]["consolidatedAnnotation"]["content"]["ner-labels"]["metaData"][0]
+    assert meta["ofacID"] == "OFAC_NEW"
+    assert meta["confidence"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +201,11 @@ def test_comprehend_lambda_writes_manifest_from_tar():
     assert captured["bucket"] == "gt-bucket" and captured["key"] == "input/input.manifest"
     lines = [json.loads(l) for l in captured["body"].splitlines()]
     assert lines[0]["source-ref"] == "s3://docs-bucket/docs/doc1.txt"
-    assert lines[0]["initialEntities"] == [{"label": "OFAC_ORG", "startOffset": 0, "endOffset": 4}]  # DATE dropped
+    assert lines[0]["initialEntities"] == [{"startOffset": 0, "endOffset": 4, "label": "OFAC_ORG"}]  # DATE dropped
     assert lines[0]["labels"] == {"labels": [{"label": l} for l in ["OFAC_ORG", "OFAC_POI", "FTO"]]}
-    assert lines[0]["ofac_metadata"] == []
-    assert lines[1]["initialEntities"] == []  # doc2 had no entities
+    # metaData is parallel to initialEntities: confidence from Score, ofacID placeholder.
+    assert lines[0]["metaData"] == [{"startOffset": 0, "endOffset": 4, "confidence": 0.99, "ofacID": "FILL"}]
+    assert lines[1]["initialEntities"] == [] and lines[1]["metaData"] == []  # doc2 had no entities
 
 
 def test_comprehend_resolve_location_event_shapes():

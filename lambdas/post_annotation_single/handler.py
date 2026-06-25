@@ -2,8 +2,9 @@
 
 Ground Truth invokes this once a batch of dataset objects has been fully
 annotated. With exactly one worker per object, consolidation is a straight
-pass-through of that worker's entity spans, re-attaching OFAC IDs by start
-offset where the crowd element dropped them.
+pass-through of that worker's entity spans, plus a parallel ``metaData`` array
+carrying each span's ``confidence`` and (when the annotator entered one) its
+``ofacID``.
 
 Input event shape (Ground Truth, version 2018-10-16)::
 
@@ -20,19 +21,31 @@ The object at ``payload.s3Uri`` is a JSON list of dataset objects::
     [
       {
         "datasetObjectId": "0",
-        "dataObject": { "source": "...", "ofac_metadata": [ ... ] },
+        "dataObject": { "source": "...", "metaData": [ ... ] },
         "annotations": [
           { "workerId": "...", "annotationData": { "content": "<json string>" } }
         ]
       }
     ]
 
-Return: a list of consolidated label objects written by Ground Truth to the
-output manifest.
+Output (per object) content::
+
+    { "<labelAttr>": {
+        "entities": [ {"startOffset":0,"endOffset":4,"label":"FTO"}, ... ],
+        "metaData": [ {"startOffset":0,"endOffset":4,"confidence":0.99,"ofacID":"OFAC_1234"}, ... ]
+    } }
+
+``entities`` and ``metaData`` are parallel (one entry per worker span, aligned by
+offset). ``ofacID`` is included ONLY when the annotator actually entered one; the
+seeded "FILL" placeholder (or an empty value) is dropped from the output.
 """
 
 import json
 from urllib.parse import urlparse
+
+# Placeholder OFAC ID the converter seeds and the UI shows. Dropped from the
+# output unless the annotator replaced it with a real ID.
+_FILL = "FILL"
 
 
 def _read_s3_json(s3_uri):
@@ -44,19 +57,20 @@ def _read_s3_json(s3_uri):
     return json.loads(body)
 
 
-def _parse_worker_content(annotation):
-    """Return the entity list from one worker's annotationData content.
-
-    The crowd-entity-annotation element serializes as either::
-
-        {"crowd-entity-annotation": {"entities": [...]}}
-    or  {"annotatedResult": {"entities": [...]}}   (keyed by the element name)
-
-    so we defensively pull the first dict value that carries an ``entities`` key.
-    """
+def _content(annotation):
+    """Parse one worker's annotationData.content (a JSON string or already a dict)."""
     content = annotation.get("annotationData", {}).get("content", "{}")
     if isinstance(content, str):
         content = json.loads(content)
+    return content if isinstance(content, dict) else {}
+
+
+def _worker_entities(content):
+    """Return the entity list from the crowd-entity-annotation submission.
+
+    Serializes as ``{"annotatedResult": {"entities": [...]}}`` (or keyed by the
+    element name); we defensively pull the first dict value carrying ``entities``.
+    """
     if "entities" in content:
         return content.get("entities", [])
     for value in content.values():
@@ -65,51 +79,53 @@ def _parse_worker_content(annotation):
     return []
 
 
-def _ofac_by_offset(data_object):
-    # Current manifest field is `ofac_metadata`; `ofacMetadata` is legacy.
-    meta = data_object.get("ofac_metadata")
-    if meta is None:
-        meta = data_object.get("ofacMetadata")
-    meta = meta or []
-    return {m["startOffset"]: m.get("ofacId") for m in meta}
+def _worker_meta_by_offset(content):
+    """Annotator-authored metaData (hidden ``metaData`` field), keyed by startOffset.
 
-
-def _worker_ofac_overrides(annotation):
-    """OFAC IDs the annotator typed in the UI modal, keyed by startOffset.
-
-    The custom template submits these in a hidden `ofacOverrides` form field
-    (a JSON array of {startOffset, endOffset, ofacId, label}). Empty IDs ignored.
+    Carries ``confidence`` (seeded) and ``ofacID`` (entered/edited in the UI), and
+    reflects spans the annotator added or removed. Tolerates a JSON-string value.
     """
-    content = annotation.get("annotationData", {}).get("content", "{}")
-    if isinstance(content, str):
-        content = json.loads(content)
-    raw = content.get("ofacOverrides") or []
+    raw = content.get("metaData") or []
     if isinstance(raw, str):
         raw = json.loads(raw or "[]")
-    return {m["startOffset"]: m.get("ofacId") for m in raw if m.get("ofacId")}
+    return {m["startOffset"]: m for m in raw if isinstance(m, dict) and "startOffset" in m}
+
+
+def _seed_meta_by_offset(data_object):
+    """Manifest-seeded metaData (confidence) keyed by startOffset."""
+    meta = data_object.get("metaData") or []
+    return {m["startOffset"]: m for m in meta if isinstance(m, dict) and "startOffset" in m}
 
 
 def _consolidate_one(dataset_object, label_attribute_name):
     annotations = dataset_object.get("annotations", [])
-    ofac_map = _ofac_by_offset(dataset_object.get("dataObject", {}))
+    seed_meta = _seed_meta_by_offset(dataset_object.get("dataObject", {}))
 
-    entities = []
+    entities, meta_data = [], []
     if annotations:
-        # Single-worker job: take the first (only) worker's answer. An OFAC ID the
-        # annotator entered in the modal wins over the manifest seed (and is the
-        # only source for a brand-new span the manifest never knew about).
-        ofac_map = {**ofac_map, **_worker_ofac_overrides(annotations[0])}
-        for ent in _parse_worker_content(annotations[0]):
-            # Attach the OFAC ID (entered or pre-seeded) if the span has none.
-            if "ofacId" not in ent and ent.get("startOffset") in ofac_map:
-                ent = {**ent, "ofacId": ofac_map[ent["startOffset"]]}
-            entities.append(ent)
+        # Single-worker job: take the first (only) worker's submission.
+        content = _content(annotations[0])
+        worker_meta = _worker_meta_by_offset(content)
+        for ent in _worker_entities(content):
+            start, end = ent.get("startOffset"), ent.get("endOffset")
+            entities.append({"startOffset": start, "endOffset": end, "label": ent.get("label")})
+
+            wm = worker_meta.get(start, {})
+            # Prefer the worker-submitted confidence; fall back to the manifest seed.
+            confidence = wm.get("confidence", seed_meta.get(start, {}).get("confidence"))
+            meta_entry = {"startOffset": start, "endOffset": end, "confidence": confidence}
+
+            # Include ofacID only if the annotator entered a real value (not FILL).
+            ofac = wm.get("ofacID")
+            if ofac and ofac != _FILL:
+                meta_entry["ofacID"] = ofac
+            meta_data.append(meta_entry)
 
     return {
         "datasetObjectId": dataset_object["datasetObjectId"],
         "consolidatedAnnotation": {
             "content": {
-                label_attribute_name: {"entities": entities},
+                label_attribute_name: {"entities": entities, "metaData": meta_data},
             }
         },
     }

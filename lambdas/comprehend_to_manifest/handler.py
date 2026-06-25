@@ -180,33 +180,46 @@ def _doc_to_record(doc, s3_docs_base, allowed_labels, min_score):
 
         {"source-ref": "s3://docs/doc1.txt",
          "labels": {"labels": [{"label": "OFAC_ORG"}, ...]},
-         "initialEntities": [{"label": "OFAC_ORG", "startOffset": 0, "endOffset": 9}, ...],
-         "ofac_metadata": []}
+         "initialEntities": [{"startOffset": 0, "endOffset": 9, "label": "OFAC_ORG"}, ...],
+         "metaData":        [{"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "FILL"}, ...]}
 
-    Only entities whose ``Type`` is in ``allowed_labels`` are kept (and, if set, those
-    scoring >= ``min_score``). ``ofac_metadata`` is always empty: this is an incoming
-    analysis job; the human reviewer adds OFAC IDs in the UI. Documents with no kept
-    entities still produce a valid record with empty seeds.
+    ``initialEntities`` and ``metaData`` are PARALLEL: one entry each per kept
+    entity, aligned by offset. ``metaData`` carries the Comprehend ``Score`` as
+    ``confidence`` and a placeholder ``ofacID`` of ``"FILL"`` that the human
+    annotator replaces in the UI (e.g. with ``"OFAC_1234"``). This comes straight
+    from an analysis job, so there are no pre-existing OFAC IDs.
+
+    Only entities whose ``Type`` is in ``allowed_labels`` are kept (and, if set,
+    those scoring >= ``min_score``). Documents with no kept entities produce a
+    valid record with both arrays empty.
     """
     allowed = set(allowed_labels)
     initial_entities = []
+    meta_data = []
     # `or []` tolerates a missing key or an explicit JSON null for Entities.
     for ent in (doc.get("Entities") or []):
         if ent.get("Type") not in allowed:
             continue
         if min_score is not None and ent.get("Score", 1.0) < min_score:
             continue
+        start, end = ent["BeginOffset"], ent["EndOffset"]
         initial_entities.append({
+            "startOffset": start,
+            "endOffset": end,
             "label": ent["Type"],
-            "startOffset": ent["BeginOffset"],
-            "endOffset": ent["EndOffset"],
+        })
+        meta_data.append({
+            "startOffset": start,
+            "endOffset": end,
+            "confidence": ent.get("Score"),
+            "ofacID": "FILL",
         })
 
     return {
         "source-ref": _source_ref(s3_docs_base, doc["File"]),
         "labels": {"labels": [{"label": label} for label in allowed_labels]},
         "initialEntities": initial_entities,
-        "ofac_metadata": [],
+        "metaData": meta_data,
     }
 
 

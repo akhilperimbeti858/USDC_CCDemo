@@ -4,10 +4,10 @@ Ground Truth invokes this function once per dataset object, *before* the task is
 rendered to a worker. Its job is to transform a raw manifest record into the
 ``taskInput`` object that the custom Crowd-HTML template binds to:
 
-    task.input.taskObject    -> the document text to annotate
-    task.input.labels        -> the entity label set
-    task.input.initialValue  -> seed entity spans (may be empty)
-    task.input.ofacMetadata  -> per-span OFAC records used by the entity panel / modal
+    task.input.taskObject     -> the document text to annotate
+    task.input.labels         -> the entity label set
+    task.input.initialEntities -> seed entity spans (may be empty)
+    task.input.metaData        -> per-span records {startOffset, endOffset, confidence, ofacID}
 
 Input event shape (Ground Truth, version 2018-10-16)::
 
@@ -17,20 +17,19 @@ Input event shape (Ground Truth, version 2018-10-16)::
       "dataObject": {
         "source": "raw text to annotate",      # OR "source-ref": "s3://bucket/key"
         "labels": { "labels": [ {"label": "PERSON"}, ... ] },  # per-record label set
-        "initialEntities": [ ... ],             # optional seed spans (may be [])
-        "ofac_metadata": [ ... ]                # [] for analysis jobs, populated for training
+        "initialEntities": [ {"startOffset":0,"endOffset":4,"label":"FTO"}, ... ],
+        "metaData":        [ {"startOffset":0,"endOffset":4,"confidence":0.99,"ofacID":"FILL"}, ... ]
       }
     }
 
-`initialEntities`/`ofac_metadata` are the current manifest field names; the
-legacy `initialValue`/`ofacMetadata` names are still accepted as a fallback.
-The renames stay at the manifest layer — the returned ``taskInput`` keeps the
-keys the Crowd-HTML template binds to (``initialValue``/``ofacMetadata``).
+`initialEntities` and `metaData` are the only accepted manifest field names (no
+legacy variants). They are passed straight through to ``taskInput`` under the
+same keys, which the Crowd-HTML template binds to.
 
 Return shape::
 
     {
-      "taskInput": { "taskObject": ..., "labels": ..., "initialValue": ..., "ofacMetadata": ... },
+      "taskInput": { "taskObject": ..., "labels": ..., "initialEntities": ..., "metaData": ... },
       "isHumanAnnotationRequired": "true"
     }
 """
@@ -101,27 +100,21 @@ def lambda_handler(event, context):
     # Normalize trailing/leading whitespace without disturbing internal offsets.
     text = text.rstrip()
 
-    # OFAC metadata travels with the record (decision: embedded in the manifest).
-    # Empty for incoming analysis jobs, pre-populated for training jobs. Default
-    # to [] when absent so the template always has a valid array. The legacy
-    # `ofacMetadata` key is still honored.
-    ofac_metadata = data_object.get("ofac_metadata")
-    if ofac_metadata is None:
-        ofac_metadata = data_object.get("ofacMetadata")
-    ofac_metadata = ofac_metadata or []
+    # Per-span metadata travels with the record: {startOffset, endOffset,
+    # confidence, ofacID}. Straight from an analysis job, ofacID is the "FILL"
+    # placeholder the annotator replaces. Default to [] when absent so the
+    # template always has a valid array.
+    meta_data = data_object.get("metaData") or []
 
-    # Optional pre-seeded entity spans (e.g. from an upstream model). May be [].
-    # Current name is `initialEntities`; `initialValue` is the legacy fallback.
-    initial_value = data_object.get("initialEntities")
-    if initial_value is None:
-        initial_value = data_object.get("initialValue")
-    initial_value = initial_value or []
+    # Pre-seeded entity spans from the upstream model: {startOffset, endOffset,
+    # label}. May be []. Aligned by offset with metaData.
+    initial_entities = data_object.get("initialEntities") or []
 
     task_input = {
         "taskObject": text,
         "labels": _labels_for(data_object),
-        "initialValue": initial_value,
-        "ofacMetadata": ofac_metadata,
+        "initialEntities": initial_entities,
+        "metaData": meta_data,
     }
 
     return {

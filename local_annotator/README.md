@@ -78,12 +78,14 @@ Searchable by **name, alias, or id**; shown as Name · Aliases · Program · Cou
   "documents": [
     {
       "file": "training_doc_CECGHHTE.txt",
+      "text": "Acme Corp wired funds to Volkov Industries …",
       "entities": [{"startOffset": 0, "endOffset": 9, "label": "ORG"}],
       "metaData": [{"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "OFAC_1001"}]
     }
   ]
 }
 ```
+- `text` is included so the export is self-contained for the downstream partition step.
 - `entities` and `metaData` are parallel. `ofacID` is included **only when set** — spans
   left as `"FILL"` have it dropped. `confidence` is `null` for human-added spans.
 - This matches the existing post-annotation / partition contract in the repo, so the

@@ -230,11 +230,27 @@ MAX = int(cfg("max_doc_bytes"))
 tr_bucket, tr_prefix = _split_s3(cfg("training_s3"))
 tr_prefix = f'{tr_prefix.rstrip("/")}/{BATCH_ID}'
 
+# The annotator export includes `text`; if an older export omits it, fall back to the
+# original batch.json (keyed by file/id) so partitioning always has the document text.
+batch_lookup = {}
+if os.path.exists(batch_path):
+    for bd in json.load(open(batch_path)).get("documents", []):
+        batch_lookup[bd.get("id") or bd.get("file")] = bd.get("text", "")
+
+def _doc_text(d):
+    t = d.get("text")
+    if t is None:
+        t = batch_lookup.get(d.get("file") or d.get("id"))
+    if t is None:
+        raise KeyError(f'No text for {d.get("file") or d.get("id")}: include "text" in the '
+                       f'export or keep batch.json at {batch_path}.')
+    return t
+
 # Comprehend training annotations CSV: File, Line, Begin Offset, End Offset, Type
 csv_rows = ["File,Line,Begin Offset,End Offset,Type"]
 n_parts = n_split = 0
 for d in annotated["documents"]:
-    parts = partition_document(d["text"], d.get("entities", []), MAX)
+    parts = partition_document(_doc_text(d), d.get("entities", []), MAX)
     names = part_filenames(d.get("file") or d.get("id"), len(parts))
     if len(parts) > 1:
         n_split += 1

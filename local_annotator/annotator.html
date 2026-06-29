@@ -416,7 +416,7 @@ function exportBatch() {
       if (m.ofacID && m.ofacID !== FILL) o.ofacID = m.ofacID;   // drop FILL placeholder
       return o;
     });
-    return { file: d.id, entities: ents, metaData: metaData };
+    return { file: d.id, text: d.text, entities: ents, metaData: metaData };
   }) };
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
   const a = document.createElement("a");

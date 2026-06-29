@@ -66,14 +66,6 @@
   .ofac-val.fill { color: #b45309; }
   .ofac-edit { color: #2563eb; margin-left: 6px; cursor: pointer; font-size: 11px; }
 
-  #ofac-search { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
-  .ofac-table-wrap { max-height: 340px; overflow: auto; border: 1px solid #eee; border-radius: 6px; }
-  table.ofac { width: 100%; border-collapse: collapse; font-size: 11px; }
-  table.ofac th { position: sticky; top: 0; background: #f3f3f3; text-align: left; padding: 5px 6px; border-bottom: 1px solid #ddd; }
-  table.ofac td { padding: 5px 6px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-  table.ofac tr.clickable:hover { background: #eef6ff; cursor: pointer; }
-  table.ofac .idcell { font-weight: 600; white-space: nowrap; }
-
   #modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 9998; }
   #modal {
     display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
@@ -97,9 +89,6 @@
 <div class="topbar">
   <label class="file-label">Load batch JSON
     <input type="file" id="file-batch" accept=".json,application/json">
-  </label>
-  <label class="file-label">Load OFAC list
-    <input type="file" id="file-ofac" accept=".json,application/json">
   </label>
   <div class="nav">
     <button class="btn" id="prev" disabled>◀ Prev</button>
@@ -125,18 +114,6 @@
       <div class="panel-hint">Select text → click a label to add. Click ✕ to remove. Click an OFAC ID to edit.</div>
       <div id="entity-list"></div>
     </div>
-
-    <div class="card">
-      <div class="panel-title">OFAC reference</div>
-      <div class="panel-hint">Search by name, alias, or ID. With an OFAC editor open, click a row to use that ID.</div>
-      <input type="text" id="ofac-search" placeholder="Search OFAC list…">
-      <div class="ofac-table-wrap">
-        <table class="ofac">
-          <thead><tr><th>Name</th><th>Aliases</th><th>Program</th><th>Country</th><th>ID</th></tr></thead>
-          <tbody id="ofac-body"><tr><td colspan="5" class="muted">No OFAC list loaded.</td></tr></tbody>
-        </table>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -144,7 +121,6 @@
 <div id="modal">
   <p>Set OFAC ID for: <strong id="modal-span"></strong></p>
   <input type="text" id="modal-input" placeholder="e.g. OFAC_1234 (blank keeps FILL)">
-  <p class="muted">Tip: search the OFAC reference and click a row to fill this.</p>
   <div class="row">
     <button class="btn" id="modal-cancel">Cancel</button>
     <button class="btn primary" id="modal-save">Save</button>
@@ -162,7 +138,6 @@ let batch = [];        // [{id, text, entities:[{startOffset,endOffset,label}], 
 let labels = ["FTO","ORG","POI"];
 let labelColor = {};
 let current = 0;
-let ofacList = [];
 let pending = null;    // pending text selection {startOffset,endOffset}
 let modalStart = null; // startOffset of entity being edited in the modal
 
@@ -196,12 +171,6 @@ function loadBatch(obj) {
   $("prev").disabled = $("next").disabled = batch.length <= 1;
   $("export").disabled = batch.length === 0;
   if (!batch.length) $("doc-id").textContent = "Batch file had no documents.";
-}
-
-function loadOfac(arr) {
-  ofacList = Array.isArray(arr) ? arr : (arr.documents || []);
-  renderOfac($("ofac-search").value);
-  toast("OFAC list: " + ofacList.length + " entries");
 }
 
 // ---------- Document rendering + selection ----------
@@ -355,41 +324,6 @@ $("modal-bg").addEventListener("click", closeModal);
 $("modal-save").addEventListener("click", saveModal);
 $("modal-input").addEventListener("keydown", e => { if (e.key === "Enter") saveModal(); });
 
-// ---------- OFAC reference search ----------
-function renderOfac(query) {
-  const body = $("ofac-body"); body.innerHTML = "";
-  if (!ofacList.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No OFAC list loaded.</td></tr>'; return; }
-  const q = (query || "").trim().toLowerCase();
-  const rows = ofacList.filter(r => {
-    if (!q) return true;
-    const hay = [r.id, r.name, (r.aliases || []).join(" ")].join(" ").toLowerCase();
-    return hay.includes(q);
-  });
-  if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No matches.</td></tr>'; return; }
-  rows.slice(0, 500).forEach(r => {
-    const tr = document.createElement("tr");
-    tr.className = "clickable";
-    tr.innerHTML =
-      "<td>" + escapeHtml(r.name || "") + "</td>" +
-      "<td>" + escapeHtml((r.aliases || []).join("; ")) + "</td>" +
-      "<td>" + escapeHtml(r.program || "") + "</td>" +
-      "<td>" + escapeHtml(r.country || "") + "</td>" +
-      '<td class="idcell">' + escapeHtml(r.id || "") + "</td>";
-    tr.addEventListener("click", () => {
-      if (modalStart !== null && $("modal").style.display === "block") {
-        $("modal-input").value = r.id || "";
-        $("modal-input").focus();
-        toast("Filled " + (r.id || ""));
-      } else {
-        navigator.clipboard && navigator.clipboard.writeText(r.id || "");
-        toast("Open an entity's OFAC editor, then click a row (copied " + (r.id || "") + ")");
-      }
-    });
-    body.appendChild(tr);
-  });
-}
-$("ofac-search").addEventListener("input", e => renderOfac(e.target.value));
-
 // ---------- Navigation + export ----------
 function renderAll() {
   if (!batch.length) { $("doc").innerHTML = ""; $("entity-list").innerHTML = ""; $("pos").textContent = "— / —"; $("doc-id").textContent = "No documents."; return; }
@@ -435,7 +369,6 @@ function readJsonFile(input, cb) {
   r.readAsText(f);
 }
 $("file-batch").addEventListener("change", e => readJsonFile(e.target, loadBatch));
-$("file-ofac").addEventListener("change", e => readJsonFile(e.target, loadOfac));
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

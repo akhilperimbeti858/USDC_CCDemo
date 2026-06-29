@@ -31,15 +31,14 @@ Databricks notebook
 
 1. Open **`annotator.html`** in a browser (double-click it — no server needed).
 2. **Load batch JSON** (try `sample_batch.json`).
-3. Optionally **Load OFAC list** (try `sample_ofac_list.json`) to enable the reference panel.
-4. Review each document:
+3. Review each document:
    - **Add an entity:** select text in the document, then click a label button (FTO / ORG / POI).
    - **Remove an entity:** click the ✕ on its card in the Entities panel.
-   - **Set an OFAC ID:** click the entity's OFAC ID (or “edit”). In the modal, type an ID, or
-     search the **OFAC reference** panel and click a matching row to fill it. Blank keeps `FILL`.
+   - **Set an OFAC ID:** click the entity's OFAC ID (or “edit”), type an ID in the modal, and
+     **Save**. Blank keeps `FILL`.
    - Click a highlighted span to jump to its card (and vice-versa).
-5. Navigate with **Prev / Next** (state is kept per document).
-6. **Export annotated batch** → downloads `annotated_batch.json`.
+4. Navigate with **Prev / Next** (state is kept per document).
+5. **Export annotated batch** → downloads `annotated_batch.json`.
 
 ## Data contracts
 
@@ -64,14 +63,6 @@ Databricks notebook
   reviewer replaces. A bare JSON array of documents (no wrapper) is also accepted.
 - **Offsets are character offsets** into `text`.
 
-### OFAC list in (optional, “Load OFAC list”)
-```json
-[
-  {"id": "OFAC_1001", "name": "Acme Corp", "aliases": ["Acme Corporation"], "program": "SDN", "country": "United States"}
-]
-```
-Searchable by **name, alias, or id**; shown as Name · Aliases · Program · Country · ID.
-
 ### Annotated out (downloaded as `annotated_batch.json`)
 ```json
 {
@@ -88,15 +79,17 @@ Searchable by **name, alias, or id**; shown as Name · Aliases · Program · Cou
 - `text` is included so the export is self-contained for the downstream partition step.
 - `entities` and `metaData` are parallel. `ofacID` is included **only when set** — spans
   left as `"FILL"` have it dropped. `confidence` is `null` for human-added spans.
-- This matches the existing post-annotation / partition contract in the repo, so the
-  downstream ≤5000-byte partitioning (`lambdas/partition_training_docs/handler.py`, reusable
-  as plain Python) consumes it without translation.
+- This matches the post-annotation / partition contract in the repo, so the downstream
+  ≤5000-byte partitioning (`training_prep/partition.py`) consumes it without translation.
 
 ## Notes
 - **No dependencies / no network.** Everything (HTML, CSS, JS) is in `annotator.html`.
+- Functionality mirrors the original Ground Truth Crowd-HTML template: highlight/label spans,
+  a running entity list, and a click-to-edit OFAC ID per entity (`FILL` placeholder). There is
+  no separate OFAC reference/lookup panel.
 - The highlighter is plain JS: selections are mapped to character offsets via
   `Range.toString().length`, so they stay exact even with nested highlight spans.
 - New, overlapping selections are rejected (one label per span; remove and re-add to change).
-- Not yet built (next round): the Databricks notebook (`ecata.sentences` → Comprehend v7 →
-  batch JSON; consume the export → partition). Field names here are identical to the rest of
-  the pipeline so that glue is straightforward.
+- Orchestration: `databricks/ner_pipeline_notebook.py` produces the batch JSON (Comprehend v7)
+  and consumes the export → partition. Field names are identical across the pipeline, so that
+  glue needs no translation.

@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Local NER Annotator (off-AWS)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #f5f5f5; color: #111; padding: 12px; }
+  h1 { font-size: 16px; margin-bottom: 8px; }
+  .muted { color: #888; font-size: 12px; }
+
+  .topbar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  .topbar .spacer { flex: 1; }
+  .btn {
+    padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px;
+    background: #fff; cursor: pointer; font-size: 13px;
+  }
+  .btn.primary { background: #111; color: #fff; border-color: #111; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .nav { display: flex; align-items: center; gap: 8px; }
+  .nav .pos { font-size: 13px; min-width: 90px; text-align: center; }
+  .file-label {
+    padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px;
+    background: #fafafa; cursor: pointer; font-size: 13px;
+  }
+  .file-label input { display: none; }
+
+  .wrapper { display: flex; gap: 12px; align-items: flex-start; }
+  .doc-col { flex: 1; min-width: 0; }
+  .side-col { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
+
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
+  .doc-id { font-size: 12px; color: #555; margin-bottom: 8px; word-break: break-all; }
+  .labelbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .labelbar .lbl {
+    padding: 4px 10px; border-radius: 14px; font-size: 12px; font-weight: 600;
+    cursor: pointer; color: #fff; border: none;
+  }
+  .labelbar .hint { font-size: 11px; color: #aaa; align-self: center; }
+
+  #doc {
+    white-space: pre-wrap; word-wrap: break-word; line-height: 1.9;
+    font-size: 15px; min-height: 120px; padding: 6px 2px; user-select: text;
+  }
+  #doc .ent { border-radius: 3px; padding: 1px 1px; cursor: pointer; color: #111; }
+
+  .panel-title {
+    font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase;
+    letter-spacing: .05em; margin-bottom: 8px;
+  }
+  .panel-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
+
+  .ent-item {
+    background: #f9f9f9; border-radius: 6px; padding: 8px 10px; font-size: 12px;
+    border-left: 3px solid transparent; margin-bottom: 8px; position: relative;
+  }
+  .ent-item .span-text { font-weight: 600; font-size: 13px; cursor: pointer; padding-right: 18px; }
+  .ent-item .span-meta { color: #888; margin-top: 2px; }
+  .ent-item .rm { position: absolute; top: 6px; right: 8px; cursor: pointer; color: #b00; font-weight: 700; }
+  .ofac-line { margin-top: 6px; }
+  .ofac-val { cursor: pointer; font-weight: 600; border-bottom: 1px dashed #999; }
+  .ofac-val.fill { color: #b45309; }
+  .ofac-edit { color: #2563eb; margin-left: 6px; cursor: pointer; font-size: 11px; }
+
+  #ofac-search { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
+  .ofac-table-wrap { max-height: 340px; overflow: auto; border: 1px solid #eee; border-radius: 6px; }
+  table.ofac { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.ofac th { position: sticky; top: 0; background: #f3f3f3; text-align: left; padding: 5px 6px; border-bottom: 1px solid #ddd; }
+  table.ofac td { padding: 5px 6px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  table.ofac tr.clickable:hover { background: #eef6ff; cursor: pointer; }
+  table.ofac .idcell { font-weight: 600; white-space: nowrap; }
+
+  #modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 9998; }
+  #modal {
+    display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 16px; width: 320px;
+    z-index: 9999; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  }
+  #modal p { font-size: 13px; color: #555; margin-bottom: 8px; }
+  #modal strong { color: #111; }
+  #modal input { width: 100%; padding: 7px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; margin-bottom: 6px; }
+  #modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+  #toast {
+    display: none; position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 10000;
+  }
+</style>
+</head>
+<body>
+
+<h1>Local NER Annotator <span class="muted">— offline, no AWS</span></h1>
+
+<div class="topbar">
+  <label class="file-label">Load batch JSON
+    <input type="file" id="file-batch" accept=".json,application/json">
+  </label>
+  <label class="file-label">Load OFAC list
+    <input type="file" id="file-ofac" accept=".json,application/json">
+  </label>
+  <div class="nav">
+    <button class="btn" id="prev" disabled>◀ Prev</button>
+    <span class="pos" id="pos">— / —</span>
+    <button class="btn" id="next" disabled>Next ▶</button>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn primary" id="export" disabled>⬇ Export annotated batch</button>
+</div>
+
+<div class="wrapper">
+  <div class="doc-col">
+    <div class="card">
+      <div class="doc-id" id="doc-id">Load a batch file to begin.</div>
+      <div class="labelbar" id="labelbar"></div>
+      <div id="doc"></div>
+    </div>
+  </div>
+
+  <div class="side-col">
+    <div class="card">
+      <div class="panel-title">Entities</div>
+      <div class="panel-hint">Select text → click a label to add. Click ✕ to remove. Click an OFAC ID to edit.</div>
+      <div id="entity-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="panel-title">OFAC reference</div>
+      <div class="panel-hint">Search by name, alias, or ID. With an OFAC editor open, click a row to use that ID.</div>
+      <input type="text" id="ofac-search" placeholder="Search OFAC list…">
+      <div class="ofac-table-wrap">
+        <table class="ofac">
+          <thead><tr><th>Name</th><th>Aliases</th><th>Program</th><th>Country</th><th>ID</th></tr></thead>
+          <tbody id="ofac-body"><tr><td colspan="5" class="muted">No OFAC list loaded.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-bg"></div>
+<div id="modal">
+  <p>Set OFAC ID for: <strong id="modal-span"></strong></p>
+  <input type="text" id="modal-input" placeholder="e.g. OFAC_1234 (blank keeps FILL)">
+  <p class="muted">Tip: search the OFAC reference and click a row to fill this.</p>
+  <div class="row">
+    <button class="btn" id="modal-cancel">Cancel</button>
+    <button class="btn primary" id="modal-save">Save</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const FILL = "FILL";
+const PALETTE = ['#2563eb','#dc2626','#16a34a','#9333ea','#ea580c','#0891b2','#ca8a04','#db2777','#4f46e5','#65a30d'];
+
+let batch = [];        // [{id, text, entities:[{startOffset,endOffset,label}], meta:{startOffset->{...}}}]
+let labels = ["FTO","ORG","POI"];
+let labelColor = {};
+let current = 0;
+let ofacList = [];
+let pending = null;    // pending text selection {startOffset,endOffset}
+let modalStart = null; // startOffset of entity being edited in the modal
+
+const $ = id => document.getElementById(id);
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", 1600);
+}
+function colorFor(label) { return labelColor[label] || "#666"; }
+
+// ---------- Loading ----------
+function loadBatch(obj) {
+  const docs = Array.isArray(obj) ? obj : (obj.documents || []);
+  labels = (obj && obj.labels) || labels;
+  labelColor = {};
+  labels.forEach((l, i) => labelColor[l] = PALETTE[i % PALETTE.length]);
+
+  batch = docs.map((d, i) => {
+    const ents = (d.initialEntities || d.entities || []).map(e => ({
+      startOffset: e.startOffset, endOffset: e.endOffset, label: e.label
+    }));
+    const meta = {};
+    (d.metaData || []).forEach(m => meta[m.startOffset] = Object.assign({}, m));
+    return { id: d.id || d.file || ("doc_" + (i + 1)), text: d.text || d.source || "", entities: ents, meta: meta };
+  });
+  current = 0;
+  pending = null;
+  renderLabelBar();
+  renderAll();
+  $("prev").disabled = $("next").disabled = batch.length <= 1;
+  $("export").disabled = batch.length === 0;
+  if (!batch.length) $("doc-id").textContent = "Batch file had no documents.";
+}
+
+function loadOfac(arr) {
+  ofacList = Array.isArray(arr) ? arr : (arr.documents || []);
+  renderOfac($("ofac-search").value);
+  toast("OFAC list: " + ofacList.length + " entries");
+}
+
+// ---------- Document rendering + selection ----------
+function renderLabelBar() {
+  const bar = $("labelbar"); bar.innerHTML = "";
+  labels.forEach(l => {
+    const b = document.createElement("button");
+    b.className = "lbl"; b.textContent = l; b.style.background = colorFor(l);
+    b.addEventListener("click", () => applyLabel(l));
+    bar.appendChild(b);
+  });
+  const hint = document.createElement("span");
+  hint.className = "hint"; hint.textContent = "(select text, then click a label)";
+  bar.appendChild(hint);
+}
+
+function renderDoc() {
+  const doc = batch[current];
+  const c = $("doc"); c.innerHTML = "";
+  const ents = [...doc.entities].sort((a, b) => a.startOffset - b.startOffset);
+  let pos = 0;
+  ents.forEach(e => {
+    if (e.startOffset > pos) c.appendChild(document.createTextNode(doc.text.slice(pos, e.startOffset)));
+    const span = document.createElement("span");
+    span.className = "ent";
+    span.style.background = colorFor(e.label) + "33";        // translucent fill
+    span.style.boxShadow = "inset 0 -2px 0 " + colorFor(e.label);
+    span.textContent = doc.text.slice(e.startOffset, e.endOffset);
+    span.title = e.label + " — click to scroll to its card";
+    span.addEventListener("click", ev => { ev.stopPropagation(); flashCard(e.startOffset); });
+    c.appendChild(span);
+    pos = e.endOffset;
+  });
+  if (pos < doc.text.length) c.appendChild(document.createTextNode(doc.text.slice(pos)));
+}
+
+// Absolute character offset of a DOM point within #doc (robust via Range.toString()).
+function absOffset(node, nodeOffset) {
+  const r = document.createRange();
+  r.setStart($("doc"), 0);
+  r.setEnd(node, nodeOffset);
+  return r.toString().length;
+}
+
+$("doc").addEventListener("mouseup", () => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !batch.length) { pending = null; return; }
+  const range = sel.getRangeAt(0);
+  if (!$("doc").contains(range.commonAncestorContainer)) { pending = null; return; }
+  let s = absOffset(range.startContainer, range.startOffset);
+  let e = absOffset(range.endContainer, range.endOffset);
+  if (s > e) { const t = s; s = e; e = t; }
+  const text = batch[current].text;
+  while (s < e && /\s/.test(text[s])) s++;        // trim whitespace at ends
+  while (e > s && /\s/.test(text[e - 1])) e--;
+  pending = (e > s) ? { startOffset: s, endOffset: e } : null;
+});
+
+function applyLabel(label) {
+  if (!batch.length) return;
+  if (!pending) { toast("Select some text first"); return; }
+  const doc = batch[current];
+  const overlaps = doc.entities.some(x => pending.startOffset < x.endOffset && x.startOffset < pending.endOffset);
+  if (overlaps) { toast("Overlaps an existing entity"); return; }
+  doc.entities.push({ startOffset: pending.startOffset, endOffset: pending.endOffset, label });
+  doc.meta[pending.startOffset] = { startOffset: pending.startOffset, endOffset: pending.endOffset, confidence: null, ofacID: FILL };
+  pending = null;
+  window.getSelection().removeAllRanges();
+  renderDoc(); renderEntityList();
+}
+
+function removeEntity(startOffset) {
+  const doc = batch[current];
+  doc.entities = doc.entities.filter(e => e.startOffset !== startOffset);
+  delete doc.meta[startOffset];
+  renderDoc(); renderEntityList();
+}
+
+// ---------- Entity side list ----------
+function flashCard(startOffset) {
+  const el = document.querySelector('.ent-item[data-start="' + startOffset + '"]');
+  if (el) { el.style.background = "#fff3cd"; setTimeout(() => el.style.background = "#f9f9f9", 1200);
+            el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+}
+
+function renderEntityList() {
+  const doc = batch[current];
+  const list = $("entity-list"); list.innerHTML = "";
+  if (!doc.entities.length) { list.innerHTML = '<div class="muted">No entities yet.</div>'; return; }
+  [...doc.entities].sort((a, b) => a.startOffset - b.startOffset).forEach(e => {
+    const meta = doc.meta[e.startOffset] || {};
+    const ofac = meta.ofacID || FILL;
+    const conf = (meta.confidence === null || meta.confidence === undefined) ? "" :
+      " &nbsp;·&nbsp; conf " + Number(meta.confidence).toFixed(2);
+    const item = document.createElement("div");
+    item.className = "ent-item"; item.dataset.start = e.startOffset;
+    item.style.borderLeftColor = colorFor(e.label);
+    item.innerHTML =
+      '<span class="rm" title="Remove">✕</span>' +
+      '<div class="span-text">' + escapeHtml(doc.text.slice(e.startOffset, e.endOffset)) + '</div>' +
+      '<div class="span-meta">' + escapeHtml(e.label) + ' &nbsp;·&nbsp; ' + e.startOffset + '–' + e.endOffset + conf + '</div>' +
+      '<div class="ofac-line">OFAC ID: <span class="ofac-val' + (ofac === FILL ? ' fill' : '') + '">' + escapeHtml(ofac) + '</span>' +
+      '<span class="ofac-edit">edit</span></div>';
+    item.querySelector(".rm").addEventListener("click", () => removeEntity(e.startOffset));
+    item.querySelector(".span-text").addEventListener("click", () => flashDocSpan(e));
+    const openEdit = () => openModal(e.startOffset);
+    item.querySelector(".ofac-val").addEventListener("click", openEdit);
+    item.querySelector(".ofac-edit").addEventListener("click", openEdit);
+    list.appendChild(item);
+  });
+}
+
+function flashDocSpan(e) {
+  const spans = $("doc").querySelectorAll(".ent");
+  for (const s of spans) {
+    if (s.textContent === batch[current].text.slice(e.startOffset, e.endOffset)) {
+      s.scrollIntoView({ block: "center", behavior: "smooth" });
+      const o = s.style.outline; s.style.outline = "2px solid #ff6600";
+      setTimeout(() => s.style.outline = o, 1200); return;
+    }
+  }
+}
+
+// ---------- OFAC ID modal ----------
+function openModal(startOffset) {
+  modalStart = startOffset;
+  const doc = batch[current];
+  const ent = doc.entities.find(e => e.startOffset === startOffset);
+  const meta = doc.meta[startOffset] || {};
+  $("modal-span").textContent = ent ? doc.text.slice(ent.startOffset, ent.endOffset) : "";
+  $("modal-input").value = (meta.ofacID && meta.ofacID !== FILL) ? meta.ofacID : "";
+  $("modal-bg").style.display = "block"; $("modal").style.display = "block";
+  $("modal-input").focus();
+}
+function closeModal() { modalStart = null; $("modal-bg").style.display = "none"; $("modal").style.display = "none"; }
+function saveModal() {
+  if (modalStart !== null) {
+    const doc = batch[current];
+    const rec = doc.meta[modalStart] || { startOffset: modalStart, confidence: null };
+    const ent = doc.entities.find(e => e.startOffset === modalStart);
+    if (ent) rec.endOffset = ent.endOffset;
+    const v = $("modal-input").value.trim();
+    rec.ofacID = v || FILL;
+    doc.meta[modalStart] = rec;
+    renderEntityList();
+  }
+  closeModal();
+}
+$("modal-cancel").addEventListener("click", closeModal);
+$("modal-bg").addEventListener("click", closeModal);
+$("modal-save").addEventListener("click", saveModal);
+$("modal-input").addEventListener("keydown", e => { if (e.key === "Enter") saveModal(); });
+
+// ---------- OFAC reference search ----------
+function renderOfac(query) {
+  const body = $("ofac-body"); body.innerHTML = "";
+  if (!ofacList.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No OFAC list loaded.</td></tr>'; return; }
+  const q = (query || "").trim().toLowerCase();
+  const rows = ofacList.filter(r => {
+    if (!q) return true;
+    const hay = [r.id, r.name, (r.aliases || []).join(" ")].join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+  if (!rows.length) { body.innerHTML = '<tr><td colspan="5" class="muted">No matches.</td></tr>'; return; }
+  rows.slice(0, 500).forEach(r => {
+    const tr = document.createElement("tr");
+    tr.className = "clickable";
+    tr.innerHTML =
+      "<td>" + escapeHtml(r.name || "") + "</td>" +
+      "<td>" + escapeHtml((r.aliases || []).join("; ")) + "</td>" +
+      "<td>" + escapeHtml(r.program || "") + "</td>" +
+      "<td>" + escapeHtml(r.country || "") + "</td>" +
+      '<td class="idcell">' + escapeHtml(r.id || "") + "</td>";
+    tr.addEventListener("click", () => {
+      if (modalStart !== null && $("modal").style.display === "block") {
+        $("modal-input").value = r.id || "";
+        $("modal-input").focus();
+        toast("Filled " + (r.id || ""));
+      } else {
+        navigator.clipboard && navigator.clipboard.writeText(r.id || "");
+        toast("Open an entity's OFAC editor, then click a row (copied " + (r.id || "") + ")");
+      }
+    });
+    body.appendChild(tr);
+  });
+}
+$("ofac-search").addEventListener("input", e => renderOfac(e.target.value));
+
+// ---------- Navigation + export ----------
+function renderAll() {
+  if (!batch.length) { $("doc").innerHTML = ""; $("entity-list").innerHTML = ""; $("pos").textContent = "— / —"; $("doc-id").textContent = "No documents."; return; }
+  $("doc-id").textContent = "Document: " + batch[current].id;
+  $("pos").textContent = (current + 1) + " / " + batch.length;
+  renderDoc(); renderEntityList();
+}
+function go(delta) {
+  if (!batch.length) return;
+  current = Math.max(0, Math.min(batch.length - 1, current + delta));
+  pending = null; renderAll();
+}
+$("prev").addEventListener("click", () => go(-1));
+$("next").addEventListener("click", () => go(1));
+
+function exportBatch() {
+  const out = { documents: batch.map(d => {
+    const ents = [...d.entities].sort((a, b) => a.startOffset - b.startOffset)
+      .map(e => ({ startOffset: e.startOffset, endOffset: e.endOffset, label: e.label }));
+    const metaData = ents.map(e => {
+      const m = d.meta[e.startOffset] || {};
+      const o = { startOffset: e.startOffset, endOffset: e.endOffset,
+                  confidence: (m.confidence === undefined ? null : m.confidence) };
+      if (m.ofacID && m.ofacID !== FILL) o.ofacID = m.ofacID;   // drop FILL placeholder
+      return o;
+    });
+    return { file: d.id, entities: ents, metaData: metaData };
+  }) };
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "annotated_batch.json";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+  toast("Exported " + batch.length + " documents");
+}
+$("export").addEventListener("click", exportBatch);
+
+// ---------- File inputs ----------
+function readJsonFile(input, cb) {
+  const f = input.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { try { cb(JSON.parse(r.result)); } catch (e) { alert("Invalid JSON: " + e.message); } };
+  r.readAsText(f);
+}
+$("file-batch").addEventListener("change", e => readJsonFile(e.target, loadBatch));
+$("file-ofac").addEventListener("change", e => readJsonFile(e.target, loadOfac));
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+</script>
+</body>
+</html>

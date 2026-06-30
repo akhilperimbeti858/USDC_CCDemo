@@ -102,7 +102,9 @@ def doc_to_record(doc_id, text, entities):
         a, b = ent["BeginOffset"], ent["EndOffset"]
         initial.append({"startOffset": a, "endOffset": b, "label": ent["Type"]})
         meta.append({"startOffset": a, "endOffset": b, "confidence": ent.get("Score"), "ofacID": "FILL"})
-    return {"id": doc_id, "text": text, "initialEntities": initial, "metaData": meta}
+    # humanReviewRequired starts true (unseen); the annotator flips it to false when done.
+    return {"id": doc_id, "text": text, "humanReviewRequired": True,
+            "initialEntities": initial, "metaData": meta}
 
 # --- partition functions from the repo (training_prep/partition.py) ---
 import sys

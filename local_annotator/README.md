@@ -30,15 +30,20 @@ Databricks notebook
 ## Usage
 
 1. Open **`annotator.html`** in a browser (double-click it — no server needed).
-2. **Load batch JSON** (try `sample_batch.json`).
+2. **Load batch JSON** (try `sample_batch.json`). It opens at the first document still needing review.
 3. Review each document:
-   - **Add an entity:** select text in the document, then click a label button (FTO / ORG / POI).
-   - **Remove an entity:** click the ✕ on its card in the Entities panel.
-   - **Set an OFAC ID:** click the entity's OFAC ID (or “edit”), type an ID in the modal, and
-     **Save**. Blank keeps `FILL`.
+   - **Add an entity:** select text, then click a label button **or press its number key (1–9)**.
+   - **Remove an entity:** click the ✕ on its card, **or hover the highlight in the document and
+     click the ✕** that appears over it.
+   - **Set an OFAC ID:** click the entity's OFAC ID (or “edit”), type an ID, and **Save**. Blank keeps `FILL`.
    - Click a highlighted span to jump to its card (and vice-versa).
-4. Navigate with **Prev / Next** (state is kept per document).
-5. **Export annotated batch** → downloads `annotated_batch.json`.
+4. **Mark reviewed (start/stop):** when a document is done, click **Mark reviewed** — this toggles its
+   `humanReviewRequired` flag. The top bar shows **Reviewed X / N**, and **Next unreviewed ⏭** jumps to
+   the next pending document.
+5. Navigate with **Prev / Next** (state is kept per document).
+6. **Export annotated batch** → downloads `annotated_batch.json` (each doc carries its
+   `humanReviewRequired`). **Re-load that file later to resume** — it reopens at the first doc still
+   needing review, so you can stop and pick up where you left off across sessions.
 
 ## Data contracts
 
@@ -50,6 +55,7 @@ Databricks notebook
     {
       "id": "training_doc_CECGHHTE.txt",
       "text": "Acme Corp wired funds to Volkov Industries …",
+      "humanReviewRequired": true,
       "initialEntities": [{"startOffset": 0, "endOffset": 9, "label": "ORG"}],
       "metaData": [{"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "FILL"}]
     }
@@ -58,6 +64,8 @@ Databricks notebook
 ```
 - `labels` optional (defaults to `["FTO","ORG","POI"]`).
 - `id` may also be `file`; `text` may also be `source`.
+- `humanReviewRequired` optional — `true` (default) = not yet reviewed, `false` = finished.
+  Either casing (`humanReviewRequired` / `HumanReviewRequired`) is accepted on load.
 - `initialEntities` / `metaData` are **parallel, offset-aligned** (the same shape the
   Comprehend converter already emits). `ofacID` of `"FILL"` is the placeholder the
   reviewer replaces. A bare JSON array of documents (no wrapper) is also accepted.
@@ -70,12 +78,15 @@ Databricks notebook
     {
       "file": "training_doc_CECGHHTE.txt",
       "text": "Acme Corp wired funds to Volkov Industries …",
+      "humanReviewRequired": false,
       "entities": [{"startOffset": 0, "endOffset": 9, "label": "ORG"}],
       "metaData": [{"startOffset": 0, "endOffset": 9, "confidence": 0.99, "ofacID": "OFAC_1001"}]
     }
   ]
 }
 ```
+- `humanReviewRequired` round-trips so you can stop/resume: re-load this file and the annotator
+  reopens at the first doc still `true`. (Reviewed docs export `false`.)
 - `text` is included so the export is self-contained for the downstream partition step.
 - `entities` and `metaData` are parallel. `ofacID` is included **only when set** — spans
   left as `"FILL"` have it dropped. `confidence` is `null` for human-added spans.

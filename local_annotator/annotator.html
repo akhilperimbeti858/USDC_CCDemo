@@ -41,12 +41,23 @@
     cursor: pointer; color: #fff; border: none;
   }
   .labelbar .hint { font-size: 11px; color: #aaa; align-self: center; }
+  .doc-status { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+  .pill.todo { background: #fde68a; color: #92400e; }
+  .pill.done { background: #bbf7d0; color: #166534; }
+  #review-stat { font-size: 12px; color: #555; }
 
   #doc {
     white-space: pre-wrap; word-wrap: break-word; line-height: 1.9;
     font-size: 15px; min-height: 120px; padding: 6px 2px; user-select: text;
   }
   #doc .ent { border-radius: 3px; padding: 1px 1px; cursor: pointer; color: #111; }
+  #ent-x {
+    display: none; position: fixed; z-index: 9990;
+    width: 18px; height: 18px; line-height: 17px; text-align: center;
+    background: #b00; color: #fff; border-radius: 50%;
+    font-size: 11px; font-weight: 700; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+  }
 
   .panel-title {
     font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase;
@@ -95,6 +106,8 @@
     <span class="pos" id="pos">— / —</span>
     <button class="btn" id="next" disabled>Next ▶</button>
   </div>
+  <span id="review-stat"></span>
+  <button class="btn" id="next-unreviewed" disabled>Next unreviewed ⏭</button>
   <div class="spacer"></div>
   <button class="btn primary" id="export" disabled>⬇ Export annotated batch</button>
 </div>
@@ -103,6 +116,7 @@
   <div class="doc-col">
     <div class="card">
       <div class="doc-id" id="doc-id">Load a batch file to begin.</div>
+      <div class="doc-status" id="doc-status"></div>
       <div class="labelbar" id="labelbar"></div>
       <div id="doc"></div>
     </div>
@@ -111,7 +125,7 @@
   <div class="side-col">
     <div class="card">
       <div class="panel-title">Entities</div>
-      <div class="panel-hint">Select text → click a label to add. Click ✕ to remove. Click an OFAC ID to edit.</div>
+      <div class="panel-hint">Select text → label (or press 1–9). Remove via ✕ here or by hovering a highlight. Click an OFAC ID to edit.</div>
       <div id="entity-list"></div>
     </div>
   </div>
@@ -128,6 +142,7 @@
 </div>
 
 <div id="toast"></div>
+<div id="ent-x" title="Remove entity">✕</div>
 
 <script>
 "use strict";
@@ -162,32 +177,43 @@ function loadBatch(obj) {
     }));
     const meta = {};
     (d.metaData || []).forEach(m => meta[m.startOffset] = Object.assign({}, m));
-    return { id: d.id || d.file || ("doc_" + (i + 1)), text: d.text || d.source || "", entities: ents, meta: meta };
+    // humanReviewRequired: true = not yet reviewed, false = finished. Default true
+    // (unseen). Accepts either casing on input.
+    const rr = (d.humanReviewRequired !== undefined) ? d.humanReviewRequired
+             : (d.HumanReviewRequired !== undefined) ? d.HumanReviewRequired : true;
+    return { id: d.id || d.file || ("doc_" + (i + 1)), text: d.text || d.source || "",
+             entities: ents, meta: meta, reviewRequired: !!rr };
   });
-  current = 0;
   pending = null;
+  current = firstUnreviewed();          // resume at the first doc still needing review
   renderLabelBar();
   renderAll();
+  updateReviewStat();
   $("prev").disabled = $("next").disabled = batch.length <= 1;
   $("export").disabled = batch.length === 0;
-  if (!batch.length) $("doc-id").textContent = "Batch file had no documents.";
+  if (!batch.length) { $("doc-id").textContent = "Batch file had no documents."; return; }
+  const done = reviewedCount();
+  toast("Loaded " + batch.length + " docs — " + done + " reviewed, " + (batch.length - done) + " remaining");
 }
 
 // ---------- Document rendering + selection ----------
 function renderLabelBar() {
   const bar = $("labelbar"); bar.innerHTML = "";
-  labels.forEach(l => {
+  labels.forEach((l, i) => {
     const b = document.createElement("button");
-    b.className = "lbl"; b.textContent = l; b.style.background = colorFor(l);
+    b.className = "lbl";
+    b.textContent = (i < 9) ? (l + " (" + (i + 1) + ")") : l;   // shortcut hint for first 9
+    b.style.background = colorFor(l);
     b.addEventListener("click", () => applyLabel(l));
     bar.appendChild(b);
   });
   const hint = document.createElement("span");
-  hint.className = "hint"; hint.textContent = "(select text, then click a label)";
+  hint.className = "hint"; hint.textContent = "(select text, then click a label or press 1–9)";
   bar.appendChild(hint);
 }
 
 function renderDoc() {
+  hideEntX();
   const doc = batch[current];
   const c = $("doc"); c.innerHTML = "";
   const ents = [...doc.entities].sort((a, b) => a.startOffset - b.startOffset);
@@ -196,11 +222,14 @@ function renderDoc() {
     if (e.startOffset > pos) c.appendChild(document.createTextNode(doc.text.slice(pos, e.startOffset)));
     const span = document.createElement("span");
     span.className = "ent";
+    span.dataset.start = e.startOffset;
     span.style.background = colorFor(e.label) + "33";        // translucent fill
     span.style.boxShadow = "inset 0 -2px 0 " + colorFor(e.label);
-    span.textContent = doc.text.slice(e.startOffset, e.endOffset);
-    span.title = e.label + " — click to scroll to its card";
+    span.textContent = doc.text.slice(e.startOffset, e.endOffset);   // ONLY entity text -> #doc offsets stay exact
+    span.title = e.label + " — hover for ✕ to remove; click to scroll to its card";
     span.addEventListener("click", ev => { ev.stopPropagation(); flashCard(e.startOffset); });
+    span.addEventListener("mouseenter", () => showEntX(span, e.startOffset));
+    span.addEventListener("mouseleave", scheduleHideEntX);
     c.appendChild(span);
     pos = e.endOffset;
   });
@@ -249,6 +278,26 @@ function removeEntity(startOffset) {
   renderDoc(); renderEntityList();
 }
 
+// ---------- Hover ✕ to remove an entity in the document ----------
+// The ✕ is a floating element OUTSIDE #doc, so it never adds characters to the
+// document text — selection offsets via Range.toString() stay exact.
+let entXStart = null, entXTimer = null;
+function showEntX(span, startOffset) {
+  clearTimeout(entXTimer);
+  entXStart = startOffset;
+  const r = span.getBoundingClientRect();
+  const x = $("ent-x");
+  x.style.left = (r.right - 6) + "px";
+  x.style.top = (r.top - 8) + "px";
+  x.style.display = "block";
+}
+function scheduleHideEntX() { clearTimeout(entXTimer); entXTimer = setTimeout(hideEntX, 180); }
+function hideEntX() { clearTimeout(entXTimer); $("ent-x").style.display = "none"; entXStart = null; }
+$("ent-x").addEventListener("mouseenter", () => clearTimeout(entXTimer));   // moving onto the ✕ keeps it open
+$("ent-x").addEventListener("mouseleave", scheduleHideEntX);
+$("ent-x").addEventListener("click", () => { if (entXStart !== null) { const s = entXStart; hideEntX(); removeEntity(s); } });
+window.addEventListener("scroll", hideEntX, true);
+
 // ---------- Entity side list ----------
 function flashCard(startOffset) {
   const el = document.querySelector('.ent-item[data-start="' + startOffset + '"]');
@@ -284,13 +333,11 @@ function renderEntityList() {
 }
 
 function flashDocSpan(e) {
-  const spans = $("doc").querySelectorAll(".ent");
-  for (const s of spans) {
-    if (s.textContent === batch[current].text.slice(e.startOffset, e.endOffset)) {
-      s.scrollIntoView({ block: "center", behavior: "smooth" });
-      const o = s.style.outline; s.style.outline = "2px solid #ff6600";
-      setTimeout(() => s.style.outline = o, 1200); return;
-    }
+  const s = $("doc").querySelector('.ent[data-start="' + e.startOffset + '"]');
+  if (s) {
+    s.scrollIntoView({ block: "center", behavior: "smooth" });
+    const o = s.style.outline; s.style.outline = "2px solid #ff6600";
+    setTimeout(() => s.style.outline = o, 1200);
   }
 }
 
@@ -324,11 +371,47 @@ $("modal-bg").addEventListener("click", closeModal);
 $("modal-save").addEventListener("click", saveModal);
 $("modal-input").addEventListener("keydown", e => { if (e.key === "Enter") saveModal(); });
 
+// ---------- Review status (start / stop) ----------
+function firstUnreviewed() { const i = batch.findIndex(d => d.reviewRequired); return i < 0 ? 0 : i; }
+function reviewedCount() { return batch.filter(d => !d.reviewRequired).length; }
+function updateReviewStat() {
+  $("review-stat").textContent = batch.length ? ("Reviewed " + reviewedCount() + " / " + batch.length) : "";
+  $("next-unreviewed").disabled = !batch.some(d => d.reviewRequired);
+}
+function renderDocStatus() {
+  const el = $("doc-status"); el.innerHTML = "";
+  if (!batch.length) return;
+  const d = batch[current];
+  const pill = document.createElement("span");
+  pill.className = "pill " + (d.reviewRequired ? "todo" : "done");
+  pill.textContent = d.reviewRequired ? "● Needs review" : "✓ Reviewed";
+  const btn = document.createElement("button");
+  btn.className = "btn";
+  btn.textContent = d.reviewRequired ? "Mark reviewed" : "Mark needs review";
+  btn.addEventListener("click", toggleReview);
+  el.appendChild(pill); el.appendChild(btn);
+}
+function toggleReview() {
+  if (!batch.length) return;
+  batch[current].reviewRequired = !batch[current].reviewRequired;
+  renderDocStatus(); updateReviewStat();
+}
+function gotoNextUnreviewed() {
+  if (!batch.length) return;
+  for (let k = 1; k <= batch.length; k++) {
+    const i = (current + k) % batch.length;
+    if (batch[i].reviewRequired) { current = i; pending = null; renderAll(); return; }
+  }
+  toast("All documents reviewed");
+}
+$("next-unreviewed").addEventListener("click", gotoNextUnreviewed);
+
 // ---------- Navigation + export ----------
 function renderAll() {
-  if (!batch.length) { $("doc").innerHTML = ""; $("entity-list").innerHTML = ""; $("pos").textContent = "— / —"; $("doc-id").textContent = "No documents."; return; }
+  if (!batch.length) { $("doc").innerHTML = ""; $("entity-list").innerHTML = ""; $("doc-status").innerHTML = ""; $("pos").textContent = "— / —"; $("doc-id").textContent = "No documents."; return; }
   $("doc-id").textContent = "Document: " + batch[current].id;
   $("pos").textContent = (current + 1) + " / " + batch.length;
+  renderDocStatus();
   renderDoc(); renderEntityList();
 }
 function go(delta) {
@@ -338,6 +421,17 @@ function go(delta) {
 }
 $("prev").addEventListener("click", () => go(-1));
 $("next").addEventListener("click", () => go(1));
+
+// ---------- Keyboard: press 1–9 to apply the matching label to the selection ----------
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;            // leave Cmd/Ctrl/Alt+digit to the browser
+  if ($("modal").style.display === "block") return;          // OFAC editor open
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return;
+  if (!batch.length || e.key < "1" || e.key > "9") return;
+  const idx = e.key.charCodeAt(0) - 49;                       // '1' -> index 0
+  if (idx < labels.length) { e.preventDefault(); applyLabel(labels[idx]); }
+});
 
 function exportBatch() {
   const out = { documents: batch.map(d => {
@@ -350,7 +444,7 @@ function exportBatch() {
       if (m.ofacID && m.ofacID !== FILL) o.ofacID = m.ofacID;   // drop FILL placeholder
       return o;
     });
-    return { file: d.id, text: d.text, entities: ents, metaData: metaData };
+    return { file: d.id, text: d.text, humanReviewRequired: d.reviewRequired, entities: ents, metaData: metaData };
   }) };
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
   const a = document.createElement("a");

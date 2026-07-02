@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Local NER Annotator (off-AWS)</title>
+<title>Local NER Annotator — badged (off-AWS)</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; background: #f5f5f5; color: #111; padding: 12px; }
@@ -95,7 +95,7 @@
 </head>
 <body>
 
-<h1>Local NER Annotator <span class="muted">— offline, no AWS</span></h1>
+<h1>Local NER Annotator <span class="muted">— badged · offline, no AWS</span></h1>
 
 <div class="topbar">
   <label class="file-label">Load batch JSON
@@ -110,6 +110,7 @@
   <button class="btn" id="next-unreviewed" disabled>Next unreviewed ⏭</button>
   <div class="spacer"></div>
   <button class="btn primary" id="export" disabled>⬇ Export annotated batch</button>
+  <span id="annotator-tag" class="muted" style="margin-left:8px;"></span>
 </div>
 
 <div class="wrapper">
@@ -144,6 +145,14 @@
 <div id="toast"></div>
 <div id="ent-x" title="Remove entity">✕</div>
 
+<!-- Full-name prompt shown after a batch is loaded (badged variant) -->
+<div id="name-bg" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:10001;"></div>
+<div id="name-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px;width:320px;z-index:10002;box-shadow:0 6px 24px rgba(0,0,0,.18);">
+  <p style="font-size:13px;color:#555;margin-bottom:8px;">Enter your <strong>full name</strong> to begin annotating:</p>
+  <input type="text" id="name-input" placeholder="Full name" style="width:100%;padding:7px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;margin-bottom:8px;">
+  <div style="display:flex;justify-content:flex-end;"><button class="btn primary" id="name-start">Start</button></div>
+</div>
+
 <script>
 "use strict";
 const FILL = "FILL";
@@ -154,6 +163,7 @@ let batch = [];        // [{id, text, entities:[{startOffset,endOffset,label}], 
 let current = 0;
 let pending = null;    // pending text selection {startOffset,endOffset}
 let modalStart = null; // startOffset of entity being edited in the modal
+let annotatorName = ""; // set via the name prompt; stamped onto reviewed docs as annotatorID
 
 const $ = id => document.getElementById(id);
 
@@ -179,7 +189,7 @@ function loadBatch(obj) {
     const rr = (d.humanReviewRequired !== undefined) ? d.humanReviewRequired
              : (d.HumanReviewRequired !== undefined) ? d.HumanReviewRequired : true;
     return { id: d.id || d.file || ("doc_" + (i + 1)), text: d.text || d.source || "",
-             entities: ents, meta: meta, reviewRequired: !!rr };
+             entities: ents, meta: meta, reviewRequired: !!rr, annotatorID: d.annotatorID || null };
   });
   pending = null;
   current = firstUnreviewed();          // resume at the first doc still needing review
@@ -191,6 +201,7 @@ function loadBatch(obj) {
   if (!batch.length) { $("doc-id").textContent = "Batch file had no documents."; return; }
   const done = reviewedCount();
   toast("Loaded " + batch.length + " docs — " + done + " reviewed, " + (batch.length - done) + " remaining");
+  if (batch.length && !annotatorName) promptName();     // require a name before tagging
 }
 
 // ---------- Document rendering + selection ----------
@@ -257,6 +268,7 @@ $("doc").addEventListener("mouseup", () => {
 
 function applyLabel(label) {
   if (!batch.length) return;
+  if (!annotatorName) { promptName(); return; }        // must enter full name first
   if (!pending) { toast("Select some text first"); return; }
   const doc = batch[current];
   const overlaps = doc.entities.some(x => pending.startOffset < x.endOffset && x.startOffset < pending.endOffset);
@@ -368,6 +380,22 @@ $("modal-bg").addEventListener("click", closeModal);
 $("modal-save").addEventListener("click", saveModal);
 $("modal-input").addEventListener("keydown", e => { if (e.key === "Enter") saveModal(); });
 
+// ---------- Annotator name (badge) ----------
+function promptName() {
+  $("name-input").value = annotatorName || "";
+  $("name-bg").style.display = "block"; $("name-modal").style.display = "block";
+  $("name-input").focus();
+}
+function startAnnotating() {
+  const v = $("name-input").value.trim();
+  if (!v) { $("name-input").focus(); return; }          // full name required
+  annotatorName = v;
+  $("annotator-tag").textContent = "Annotator: " + annotatorName;
+  $("name-bg").style.display = "none"; $("name-modal").style.display = "none";
+}
+$("name-start").addEventListener("click", startAnnotating);
+$("name-input").addEventListener("keydown", e => { if (e.key === "Enter") startAnnotating(); });
+
 // ---------- Review status (start / stop) ----------
 function firstUnreviewed() { const i = batch.findIndex(d => d.reviewRequired); return i < 0 ? 0 : i; }
 function reviewedCount() { return batch.filter(d => !d.reviewRequired).length; }
@@ -390,7 +418,10 @@ function renderDocStatus() {
 }
 function toggleReview() {
   if (!batch.length) return;
-  batch[current].reviewRequired = !batch[current].reviewRequired;
+  const d = batch[current];
+  d.reviewRequired = !d.reviewRequired;
+  if (!d.reviewRequired) d.annotatorID = annotatorName || d.annotatorID || null;  // stamp who reviewed it
+  else delete d.annotatorID;                                                       // back to needs-review
   renderDocStatus(); updateReviewStat();
 }
 function gotoNextUnreviewed() {
@@ -441,7 +472,10 @@ function exportBatch() {
       if (m.ofacID && m.ofacID !== FILL) o.ofacID = m.ofacID;   // drop FILL placeholder
       return o;
     });
-    return { file: d.id, text: d.text, humanReviewRequired: d.reviewRequired, entities: ents, metaData: metaData };
+    return Object.assign(
+      { file: d.id, text: d.text, humanReviewRequired: d.reviewRequired },
+      d.annotatorID ? { annotatorID: d.annotatorID } : {},   // present only on reviewed docs
+      { entities: ents, metaData: metaData });
   }) };
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
   const a = document.createElement("a");

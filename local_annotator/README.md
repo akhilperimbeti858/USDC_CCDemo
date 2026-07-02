@@ -45,6 +45,16 @@ Databricks notebook
    `humanReviewRequired`). **Re-load that file later to resume** — it reopens at the first doc still
    needing review, so you can stop and pick up where you left off across sessions.
 
+**Labels & colors** are fixed in the UI: **FTO = blue (key 1)**, **POI = red (key 2)**,
+**ORG = green (key 3)**. The batch file's `labels` field is ignored.
+
+## Variant — `annotator_badged.html`
+Identical to `annotator.html`, but it **prompts for the annotator's full name** right after a batch
+is loaded (tagging is blocked until entered), shows `Annotator: <name>` in the top bar, and stamps
+**`annotatorID: "<full name>"`** onto each document that gets marked reviewed. On export, reviewed
+docs carry both `humanReviewRequired: false` and `annotatorID`; unreviewed docs carry neither name.
+Existing `annotatorID`s in a re-loaded file are preserved, so multiple reviewers' work accumulates.
+
 ## Data contracts
 
 ### Batch in (loaded via “Load batch JSON”)

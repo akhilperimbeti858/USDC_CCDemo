@@ -44,6 +44,11 @@ Databricks notebook
 6. **Export annotated batch** → downloads `annotated_batch.json` (each doc carries its
    `humanReviewRequired`). **Re-load that file later to resume** — it reopens at the first doc still
    needing review, so you can stop and pick up where you left off across sessions.
+7. **You don't have to re-download to save progress.** Every edit is **auto-saved in the browser**
+   (localStorage) — a subtle **Saved ✓** confirms it, and a refresh/crash/closed tab loses nothing.
+   Re-load the same batch and the annotator **offers to restore** your saved edits (the badged variant
+   keys autosave by Batch ID; the plain one uses a single `default` key). **💾 Save progress** downloads
+   a re-loadable copy (same schema as Export) whenever you want to hand partial work to someone else.
 
 **Labels & colors** are fixed in the UI: **FTO = blue (key 1)**, **POI = red (key 2)**,
 **ORG = green (key 3)**. The batch file's `labels` field is ignored.
@@ -117,3 +122,6 @@ The **Batch ID is used only in the download filename** — `annotated_batch_{BAT
 - Orchestration: `databricks/ner_pipeline_notebook.py` produces the batch JSON (Comprehend v7)
   and consumes the export → partition. Field names are identical across the pipeline, so that
   glue needs no translation.
+- **Consolidating many reviewers' exports** (computed hit/no-hit × reviewed/unreviewed
+  categories, multi-reviewer merge, training-set assembly) lives in **`consolidation/`** —
+  see `consolidation/README.md`.

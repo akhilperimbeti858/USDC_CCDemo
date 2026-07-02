@@ -1,0 +1,18 @@
+{
+  "documents": [
+    {
+      "file": "d_hit_confirmed.txt",
+      "text": "Acme Corp wired funds to the Red Brigade.",
+      "humanReviewRequired": false,
+      "annotatorID": "Bob",
+      "entities": [
+        {"startOffset": 0, "endOffset": 9, "label": "ORG"},
+        {"startOffset": 29, "endOffset": 40, "label": "FTO"}
+      ],
+      "metaData": [
+        {"startOffset": 0, "endOffset": 9, "confidence": 0.98, "ofacID": "OFAC_1001"},
+        {"startOffset": 29, "endOffset": 40, "confidence": null, "ofacID": "OFAC_3300"}
+      ]
+    }
+  ]
+}

@@ -109,6 +109,8 @@
   <span id="review-stat"></span>
   <button class="btn" id="next-unreviewed" disabled>Next unreviewed ⏭</button>
   <div class="spacer"></div>
+  <span id="autosave-ind" class="muted" title="Work is auto-saved in this browser"></span>
+  <button class="btn" id="save-progress" disabled>💾 Save progress</button>
   <button class="btn primary" id="export" disabled>⬇ Export annotated batch</button>
   <span id="annotator-tag" class="muted" style="margin-left:8px;"></span>
 </div>
@@ -199,7 +201,7 @@ function loadBatch(obj) {
   renderAll();
   updateReviewStat();
   $("prev").disabled = $("next").disabled = batch.length <= 1;
-  $("export").disabled = batch.length === 0;
+  $("export").disabled = $("save-progress").disabled = batch.length === 0;
   if (!batch.length) { $("doc-id").textContent = "Batch file had no documents."; return; }
   const done = reviewedCount();
   toast("Loaded " + batch.length + " docs — " + done + " reviewed, " + (batch.length - done) + " remaining");
@@ -279,14 +281,14 @@ function applyLabel(label) {
   doc.meta[pending.startOffset] = { startOffset: pending.startOffset, endOffset: pending.endOffset, confidence: null, ofacID: FILL };
   pending = null;
   window.getSelection().removeAllRanges();
-  renderDoc(); renderEntityList();
+  renderDoc(); renderEntityList(); autosave();
 }
 
 function removeEntity(startOffset) {
   const doc = batch[current];
   doc.entities = doc.entities.filter(e => e.startOffset !== startOffset);
   delete doc.meta[startOffset];
-  renderDoc(); renderEntityList();
+  renderDoc(); renderEntityList(); autosave();
 }
 
 // ---------- Hover ✕ to remove an entity in the document ----------
@@ -373,7 +375,7 @@ function saveModal() {
     const v = $("modal-input").value.trim();
     rec.ofacID = v || FILL;
     doc.meta[modalStart] = rec;
-    renderEntityList();
+    renderEntityList(); autosave();
   }
   closeModal();
 }
@@ -397,6 +399,9 @@ function startAnnotating() {
   annotatorName = v; batchId = b;
   $("annotator-tag").textContent = "Annotator: " + annotatorName + " · Batch " + batchId;
   $("name-bg").style.display = "none"; $("name-modal").style.display = "none";
+  maybeResume();          // now that the Batch ID is known, offer to restore this batch's autosave
+  current = firstUnreviewed();
+  renderAll(); updateReviewStat();
 }
 $("name-start").addEventListener("click", startAnnotating);
 $("name-input").addEventListener("keydown", e => { if (e.key === "Enter") startAnnotating(); });
@@ -428,7 +433,7 @@ function toggleReview() {
   d.reviewRequired = !d.reviewRequired;
   if (!d.reviewRequired) d.annotatorID = annotatorName || d.annotatorID || null;  // stamp who reviewed it
   else delete d.annotatorID;                                                       // back to needs-review
-  renderDocStatus(); updateReviewStat();
+  renderDocStatus(); updateReviewStat(); autosave();
 }
 function gotoNextUnreviewed() {
   if (!batch.length) return;
@@ -467,8 +472,9 @@ document.addEventListener("keydown", e => {
   if (idx < labels.length) { e.preventDefault(); applyLabel(labels[idx]); }
 });
 
-function exportBatch() {
-  const out = { documents: batch.map(d => {
+// Build the re-loadable export object (identical shape for "Export" and "Save progress").
+function buildExport() {
+  return { documents: batch.map(d => {
     const ents = [...d.entities].sort((a, b) => a.startOffset - b.startOffset)
       .map(e => ({ startOffset: e.startOffset, endOffset: e.endOffset, label: e.label }));
     const metaData = ents.map(e => {
@@ -483,14 +489,70 @@ function exportBatch() {
       d.annotatorID ? { annotatorID: d.annotatorID } : {},   // present only on reviewed docs
       { entities: ents, metaData: metaData });
   }) };
-  const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+}
+function downloadJson(obj, name) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = "annotated_batch" + (batchId ? "_" + batchId : "") + ".json";
+  a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(a.href);
+}
+function exportBatch() {
+  downloadJson(buildExport(), "annotated_batch" + (batchId ? "_" + batchId : "") + ".json");
   toast("Exported " + batch.length + " documents");
 }
+function saveProgress() {
+  downloadJson(buildExport(), "annotated_batch" + (batchId ? "_" + batchId : "") + "_inprogress.json");
+  toast("Saved progress for " + batch.length + " documents");
+}
 $("export").addEventListener("click", exportBatch);
+$("save-progress").addEventListener("click", saveProgress);
+
+// ---------- Browser autosave (localStorage), keyed per Batch ID ----------
+// Autosaves the full working state on every mutating action, so a refresh/crash/stop
+// loses nothing and there's no need to re-download to keep progress.
+function autosaveKey() { return "nerAutosave:" + (batchId || "default"); }
+function autosave() {
+  try {
+    const payload = { savedAt: new Date().toISOString(), annotatorName: annotatorName, export: buildExport() };
+    localStorage.setItem(autosaveKey(), JSON.stringify(payload));
+    const ind = $("autosave-ind");
+    ind.textContent = "Saved ✓";
+    clearTimeout(autosave._t); autosave._t = setTimeout(() => ind.textContent = "", 1400);
+  } catch (e) { /* storage full/blocked — manual save still works */ }
+}
+function readAutosave() {
+  try { const raw = localStorage.getItem(autosaveKey()); return raw ? JSON.parse(raw) : null; }
+  catch (e) { return null; }
+}
+function clearAutosave() { try { localStorage.removeItem(autosaveKey()); } catch (e) {} }
+function applySaved(savedExport) {
+  const saved = {};
+  (savedExport.documents || []).forEach(d => saved[d.file || d.id] = d);
+  batch.forEach(doc => {
+    const s = saved[doc.id];
+    if (!s) return;
+    doc.entities = (s.entities || []).map(e => ({ startOffset: e.startOffset, endOffset: e.endOffset, label: e.label }));
+    doc.meta = {};
+    (s.metaData || []).forEach(m => doc.meta[m.startOffset] = Object.assign({}, m));
+    if (s.humanReviewRequired !== undefined) doc.reviewRequired = !!s.humanReviewRequired;
+    if (s.annotatorID) doc.annotatorID = s.annotatorID; else delete doc.annotatorID;
+  });
+}
+function maybeResume() {
+  const saved = readAutosave();
+  if (!saved || !saved.export) return;
+  const ids = new Set(batch.map(d => d.id));
+  const overlap = (saved.export.documents || []).some(d => ids.has(d.file || d.id));
+  if (!overlap) return;
+  const when = saved.savedAt ? new Date(saved.savedAt).toLocaleString() : "an earlier session";
+  if (confirm("Resume in-progress work for Batch " + batchId + " from " + when + "?\n\nOK = restore your saved edits · Cancel = discard them and use the loaded file as-is.")) {
+    applySaved(saved.export);
+    toast("Resumed saved work");
+  } else {
+    clearAutosave();
+  }
+}
 
 // ---------- File inputs ----------
 function readJsonFile(input, cb) {

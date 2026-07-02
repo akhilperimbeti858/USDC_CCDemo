@@ -35,3 +35,8 @@ off-AWS NER labeling loop. The only AWS service it touches is **Comprehend**.
   for `batch.json` / `annotated_batch.json`; automating that transfer is out of scope here.
 - Training output is Comprehend's **CSV annotations** format (`File,Line,Begin Offset,End
   Offset,Type`) with each part as its own document (Line 0).
+- **Multiple reviewers?** Phase 4 above partitions a single export. To merge many reviewers'
+  exports into one status record per doc (with computed hit/no-hit × reviewed/unreviewed
+  categories and the training-set assembly), use the **[`consolidation/`](../consolidation)**
+  folder — `consolidate_notebook.py` reads a `batch_<ID>/{input,annotations}/` folder and
+  writes `consolidated/` + `training/`. It reuses the same `partition.py`.

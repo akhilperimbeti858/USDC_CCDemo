@@ -1,0 +1,43 @@
+{
+  "documents": [
+    {
+      "file": "d_hit_confirmed.txt",
+      "text": "Acme Corp wired funds to the Red Brigade.",
+      "humanReviewRequired": false,
+      "annotatorID": "Alice",
+      "entities": [{"startOffset": 0, "endOffset": 9, "label": "ORG"}],
+      "metaData": [{"startOffset": 0, "endOffset": 9, "confidence": 0.98, "ofacID": "OFAC_1001"}]
+    },
+    {
+      "file": "d_false_positive.txt",
+      "text": "The weather in Reading was mild today.",
+      "humanReviewRequired": false,
+      "annotatorID": "Alice",
+      "entities": [],
+      "metaData": []
+    },
+    {
+      "file": "d_new_hit.txt",
+      "text": "John Doe moved USDC to a wallet in Tehran.",
+      "humanReviewRequired": false,
+      "annotatorID": "Alice",
+      "entities": [{"startOffset": 34, "endOffset": 40, "label": "POI"}],
+      "metaData": [{"startOffset": 34, "endOffset": 40, "confidence": null, "ofacID": "OFAC_2050"}]
+    },
+    {
+      "file": "d_clean.txt",
+      "text": "No sanctioned entities appear here at all.",
+      "humanReviewRequired": false,
+      "annotatorID": "Alice",
+      "entities": [],
+      "metaData": []
+    },
+    {
+      "file": "d_untouched.txt",
+      "text": "Volkov Industries appears once.",
+      "humanReviewRequired": true,
+      "entities": [],
+      "metaData": []
+    }
+  ]
+}

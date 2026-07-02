@@ -148,8 +148,9 @@
 <!-- Full-name prompt shown after a batch is loaded (badged variant) -->
 <div id="name-bg" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:10001;"></div>
 <div id="name-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ddd;border-radius:10px;padding:16px;width:320px;z-index:10002;box-shadow:0 6px 24px rgba(0,0,0,.18);">
-  <p style="font-size:13px;color:#555;margin-bottom:8px;">Enter your <strong>full name</strong> to begin annotating:</p>
+  <p style="font-size:13px;color:#555;margin-bottom:8px;">Enter your <strong>full name</strong> and the <strong>Batch ID</strong> to begin:</p>
   <input type="text" id="name-input" placeholder="Full name" style="width:100%;padding:7px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;margin-bottom:8px;">
+  <input type="number" id="batch-id-input" placeholder="Batch ID (number)" style="width:100%;padding:7px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;margin-bottom:8px;">
   <div style="display:flex;justify-content:flex-end;"><button class="btn primary" id="name-start">Start</button></div>
 </div>
 
@@ -164,6 +165,7 @@ let current = 0;
 let pending = null;    // pending text selection {startOffset,endOffset}
 let modalStart = null; // startOffset of entity being edited in the modal
 let annotatorName = ""; // set via the name prompt; stamped onto reviewed docs as annotatorID
+let batchId = "";       // numeric Batch ID from the prompt; used only in the export filename
 
 const $ = id => document.getElementById(id);
 
@@ -383,18 +385,22 @@ $("modal-input").addEventListener("keydown", e => { if (e.key === "Enter") saveM
 // ---------- Annotator name (badge) ----------
 function promptName() {
   $("name-input").value = annotatorName || "";
+  $("batch-id-input").value = batchId || "";
   $("name-bg").style.display = "block"; $("name-modal").style.display = "block";
   $("name-input").focus();
 }
 function startAnnotating() {
   const v = $("name-input").value.trim();
-  if (!v) { $("name-input").focus(); return; }          // full name required
-  annotatorName = v;
-  $("annotator-tag").textContent = "Annotator: " + annotatorName;
+  if (!v) { $("name-input").focus(); return; }                                  // full name required
+  const b = $("batch-id-input").value.trim();
+  if (b === "" || isNaN(Number(b))) { $("batch-id-input").focus(); return; }    // numeric Batch ID required
+  annotatorName = v; batchId = b;
+  $("annotator-tag").textContent = "Annotator: " + annotatorName + " · Batch " + batchId;
   $("name-bg").style.display = "none"; $("name-modal").style.display = "none";
 }
 $("name-start").addEventListener("click", startAnnotating);
 $("name-input").addEventListener("keydown", e => { if (e.key === "Enter") startAnnotating(); });
+$("batch-id-input").addEventListener("keydown", e => { if (e.key === "Enter") startAnnotating(); });
 
 // ---------- Review status (start / stop) ----------
 function firstUnreviewed() { const i = batch.findIndex(d => d.reviewRequired); return i < 0 ? 0 : i; }
@@ -479,7 +485,7 @@ function exportBatch() {
   }) };
   const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = "annotated_batch.json";
+  a.href = URL.createObjectURL(blob); a.download = "annotated_batch" + (batchId ? "_" + batchId : "") + ".json";
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(a.href);
   toast("Exported " + batch.length + " documents");

@@ -49,11 +49,14 @@ Databricks notebook
 **ORG = green (key 3)**. The batch file's `labels` field is ignored.
 
 ## Variant — `annotator_badged.html`
-Identical to `annotator.html`, but it **prompts for the annotator's full name** right after a batch
-is loaded (tagging is blocked until entered), shows `Annotator: <name>` in the top bar, and stamps
-**`annotatorID: "<full name>"`** onto each document that gets marked reviewed. On export, reviewed
-docs carry both `humanReviewRequired: false` and `annotatorID`; unreviewed docs carry neither name.
-Existing `annotatorID`s in a re-loaded file are preserved, so multiple reviewers' work accumulates.
+Identical to `annotator.html`, but right after a batch is loaded it **prompts for the annotator's
+full name and a numeric Batch ID** (tagging is blocked until both are entered) and shows
+`Annotator: <name> · Batch <id>` in the top bar. It stamps **`annotatorID: "<full name>"`** onto
+each document that gets marked reviewed. On export, reviewed docs carry both
+`humanReviewRequired: false` and `annotatorID`; unreviewed docs carry neither. Existing
+`annotatorID`s in a re-loaded file are preserved, so multiple reviewers' work accumulates.
+The **Batch ID is used only in the download filename** — `annotated_batch_{BATCH_ID}.json` — and is
+**not** written into the JSON content.
 
 ## Data contracts
 

@@ -12,6 +12,13 @@ There are two ways to run the same workflow:
 2. **`python_boto3/`** — the same logic in Python, built for **local testing/
    simulation** plus a boto3 job launcher.
 
+> **Moving off AWS?** Cognito (required by Ground Truth's private workforce) isn't on the
+> approved software list, so the review step now runs **off-AWS** — Comprehend pre-labels,
+> a **local HTML annotator** handles human review, and pure-Python modules consolidate and
+> partition the results to retrain. See **[`OFFAWS_NER_PIPELINE.md`](OFFAWS_NER_PIPELINE.md)**
+> for the full flow and a function-by-function reference (`databricks/`, `local_annotator/`,
+> `training_prep/`, `consolidation/`, `sharepoint/`).
+
 ---
 
 ## Table of contents

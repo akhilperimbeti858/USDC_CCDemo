@@ -581,65 +581,59 @@ function findCol(headers, regexes) {
 function splitCountries(s) {
   return String(s || "").split(/[;|,\n]/).map(x => x.trim()).filter(Boolean);
 }
-// CSV (one row per alias) -> grouped-by-id entities.
+// OFAC list format: ID, Type, Text (one row per name/alias, all listed the same).
+// Group by ID; every Text becomes a searchable name/alias; keep Type.
 function groupOfacRows(records) {
   const map = {};
   records.forEach(r => {
     const id = String(r.id || "").trim();
     if (!id) return;
-    if (!map[id]) map[id] = { id: id, name: "", aliases: [], countries: [] };
+    if (!map[id]) map[id] = { id: id, type: (r.type || "").trim(), name: "", aliases: [] };
     const g = map[id];
-    if (r.name && !g.name) g.name = r.name;
-    [r.name, r.alias].forEach(a => { a = (a || "").trim(); if (a && g.aliases.indexOf(a) < 0) g.aliases.push(a); });
-    (r.countries || []).forEach(c => { if (c && g.countries.indexOf(c) < 0) g.countries.push(c); });
+    if (!g.type && r.type) g.type = String(r.type).trim();
+    const t = (r.text || "").trim();
+    if (t && g.aliases.indexOf(t) < 0) g.aliases.push(t);
   });
-  return Object.keys(map).map(k => { const g = map[k]; if (!g.name) g.name = g.aliases[0] || g.id; return g; });
+  return Object.keys(map).map(k => { const g = map[k]; g.name = g.aliases[0] || g.id; return g; });
 }
 function parseOfacCsv(text) {
   const rows = parseCSV(text);
   if (!rows.length) return [];
   const h = rows[0];
-  const idIdx = findCol(h, [/ofac.?id/, /^id$/, /\bid\b/]);
-  const nameIdx = findCol(h, [/^name$/, /primary/, /entity/, /\bname\b/]);
-  const aliasIdx = findCol(h, [/alias/, /aka/, /alt/]);
-  const ctryIdx = findCol(h, [/countr/]);
+  // Detect a header row; otherwise fall back to positional columns ID, Type, Text.
+  const looksLikeHeader = /^(id|ofac)/i.test((h[0] || "").trim()) || /type|text|name/i.test((h[1] || "") + (h[2] || ""));
+  const idIdx = findCol(h, [/^id$/, /ofac.?id/, /\bid\b/]);
+  const typeIdx = findCol(h, [/type/]);
+  const textIdx = findCol(h, [/^text$/, /name/, /alias/, /\btext\b/]);
+  const iId = idIdx >= 0 ? idIdx : 0;
+  const iType = typeIdx >= 0 ? typeIdx : 1;
+  const iText = textIdx >= 0 ? textIdx : 2;
   const records = [];
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = looksLikeHeader ? 1 : 0; i < rows.length; i++) {
     const c = rows[i]; if (!c.length || (c.length === 1 && c[0] === "")) continue;
-    records.push({
-      id: idIdx >= 0 ? c[idIdx] : "",
-      name: nameIdx >= 0 ? c[nameIdx] : "",
-      alias: aliasIdx >= 0 ? c[aliasIdx] : "",
-      countries: ctryIdx >= 0 ? splitCountries(c[ctryIdx]) : [],
-    });
+    records.push({ id: c[iId] || "", type: c[iType] || "", text: c[iText] || "" });
   }
   return groupOfacRows(records);
 }
-// Accept an array that is either already grouped ({id,name,aliases,countries})
-// or alias-rows ({id,name,alias,countries}); return grouped.
+// Accept an array that is either already grouped ({id,type,name,aliases})
+// or alias-rows ({id,type,text}); return grouped.
 function normalizeOfac(arr) {
   if (!Array.isArray(arr)) return [];
   const grouped = arr.some(x => Array.isArray(x.aliases));
   if (grouped) {
     return arr.map(x => ({
       id: String(x.id || "").trim(),
+      type: x.type || "",
       name: x.name || (x.aliases && x.aliases[0]) || String(x.id || ""),
       aliases: (x.aliases || []).slice(),
-      countries: Array.isArray(x.countries) ? x.countries.slice() : splitCountries(x.countries),
     })).filter(x => x.id);
   }
-  return groupOfacRows(arr.map(x => ({
-    id: x.id, name: x.name, alias: x.alias,
-    countries: Array.isArray(x.countries) ? x.countries : splitCountries(x.countries),
-  })));
+  return groupOfacRows(arr.map(x => ({ id: x.id, type: x.type, text: x.text || x.name })));
 }
 function setOfacData(list, sourceLabel) {
   ofacRows = list || [];
-  ofacById = {}; ofacByCountry = {};
-  ofacRows.forEach(e => {
-    ofacById[e.id] = e;
-    e.countries.forEach(c => { const k = c.toLowerCase(); (ofacByCountry[k] = ofacByCountry[k] || []).push(e.id); });
-  });
+  ofacById = {};
+  ofacRows.forEach(e => { ofacById[e.id] = e; });
   $("ofac-search").disabled = ofacRows.length === 0;
   $("ofac-stat").textContent = ofacRows.length ? ("OFAC: " + ofacRows.length + " entities" + (sourceLabel ? " (" + sourceLabel + ")" : "")) : "";
   renderOfacPanel();
@@ -663,12 +657,6 @@ function ofacMatches(query) {
   }
   return out;
 }
-function ofacForCountry(country) {
-  const ids = ofacByCountry[String(country || "").toLowerCase()] || [];
-  const seen = {}; const out = [];
-  ids.forEach(id => { if (!seen[id]) { seen[id] = 1; out.push(ofacById[id]); } });
-  return out;
-}
 function renderOfacPanel() {
   const box = $("ofac-results");
   const tgt = $("ofac-target");
@@ -680,29 +668,25 @@ function renderOfacPanel() {
   } else { tgt.textContent = ""; }
 
   if (!ofacRows.length) {
-    box.innerHTML = '<div class="muted">Load an OFAC list (CSV) to search.</div>';
+    box.innerHTML = '<div class="muted">Load an OFAC list (CSV: ID, Type, Text) to search.</div>';
     return;
   }
   const q = $("ofac-search").value.trim();
-  let list, header;
-  if (q) {
-    list = ofacMatches(q);
-    header = "Matches (" + list.length + ")";
-  } else {
-    const country = batch.length ? batch[current].country : "";
-    list = country ? ofacForCountry(country) : [];
-    header = country ? ("Linked to " + country + " (" + list.length + ")")
-                     : "Type to search, or open a document with a COUNTRY.";
+  if (!q) {
+    box.innerHTML = '<div class="panel-hint">Type a name or OFAC ID to search (' + ofacRows.length + ' entities).</div>';
+    return;
   }
-  let html = '<div class="panel-hint">' + escapeHtml(header) + '</div>';
+  const list = ofacMatches(q);
+  let html = '<div class="panel-hint">Matches (' + list.length + ')</div>';
   if (!list.length) {
-    html += '<div class="muted">' + (q ? "No matches." : "No OFAC entities for this country.") + '</div>';
+    html += '<div class="muted">No matches.</div>';
   } else {
     list.forEach(e => {
-      const aliases = e.aliases.length > 1 ? (" · aka " + escapeHtml(e.aliases.slice(1, 4).join(", "))) : "";
+      const aka = e.aliases.length > 1 ? (" · aka " + escapeHtml(e.aliases.slice(1, 4).join(", "))) : "";
+      const type = e.type ? (escapeHtml(e.type)) : "";
       html += '<div class="ofac-row" data-id="' + escapeHtml(e.id) + '">' +
         '<div><span class="oname">' + escapeHtml(e.name) + '</span> <span class="oid">' + escapeHtml(e.id) + '</span></div>' +
-        '<div class="octry">' + escapeHtml(e.countries.join(", ")) + aliases + '</div>' +
+        '<div class="octry">' + type + aka + '</div>' +
         '</div>';
     });
   }

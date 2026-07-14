@@ -1,9 +1,12 @@
-ofac_id,name,alias,countries
-OFAC_1001,Acme Corp,Acme Corporation,Iran;Russia
-OFAC_1001,Acme Corp,ACME Ltd,Iran;Russia
-OFAC_3300,Red Brigade,Brigata Rossa,Iran
-OFAC_2050,John Doe,J. Doe,Iran
-OFAC_2050,John Doe,Johnny Doe,Iran
-OFAC_4001,Volkov Industries,Volkov Ind,Russia
-OFAC_4001,Volkov Industries,OOO Volkov,Russia
-OFAC_5500,Tehran Logistics,Tehran Log Co,Iran
+ID,Type,Text
+1001,Entity,Acme Corp
+1001,Entity,Acme Corporation
+1001,Entity,ACME Ltd
+3300,Entity,Red Brigade
+3300,Entity,Brigata Rossa
+2050,Individual,John Doe
+2050,Individual,J. Doe
+2050,Individual,Johnny Doe
+4001,Entity,Volkov Industries
+4001,Entity,OOO Volkov
+5500,Entity,Tehran Logistics

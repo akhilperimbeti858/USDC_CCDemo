@@ -1,12 +1,12 @@
-ID,Type,Text
-1001,Entity,Acme Corp
-1001,Entity,Acme Corporation
-1001,Entity,ACME Ltd
-3300,Entity,Red Brigade
-3300,Entity,Brigata Rossa
-2050,Individual,John Doe
-2050,Individual,J. Doe
-2050,Individual,Johnny Doe
-4001,Entity,Volkov Industries
-4001,Entity,OOO Volkov
-5500,Entity,Tehran Logistics
+ID,Type,Text,Program,Country
+1001,Entity,Acme Corp,SDGT,Iran;Russia
+1001,Entity,Acme Corporation,SDGT,Iran;Russia
+1001,Entity,ACME Ltd,SDGT,Iran;Russia
+3300,Entity,Red Brigade,FTO,Iran
+3300,Entity,Brigata Rossa,FTO,Iran
+2050,Individual,John Doe,SDNTK,Iran
+2050,Individual,J. Doe,SDNTK,Iran
+2050,Individual,Johnny Doe,SDNTK,Iran
+4001,Entity,Volkov Industries,UKRAINE-EO13662,Russia
+4001,Entity,OOO Volkov,UKRAINE-EO13662,Russia
+5500,Entity,Tehran Logistics,IFSR,Iran

@@ -1,0 +1,9 @@
+ofac_id,name,alias,countries
+OFAC_1001,Acme Corp,Acme Corporation,Iran;Russia
+OFAC_1001,Acme Corp,ACME Ltd,Iran;Russia
+OFAC_3300,Red Brigade,Brigata Rossa,Iran
+OFAC_2050,John Doe,J. Doe,Iran
+OFAC_2050,John Doe,Johnny Doe,Iran
+OFAC_4001,Volkov Industries,Volkov Ind,Russia
+OFAC_4001,Volkov Industries,OOO Volkov,Russia
+OFAC_5500,Tehran Logistics,Tehran Log Co,Iran

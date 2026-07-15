@@ -185,9 +185,14 @@ Note each folder's server-relative path (e.g. `/sites/<YourSite>/Shared Document
 1. New **Instant cloud flow → "When an HTTP request is received"**.
 2. *(Recommended)* the same **key Condition** (403 if the secret doesn't match).
 3. **Condition:** is `triggerOutputs()?['queries']?['file']` **empty**?
-   - **Empty → list:** SharePoint **List folder** on `ner/input` → *(optional)* **Select**
-     mapping each item to `concat('input/', item()?['{Name}'])` → **Response** 200,
-     **Body** = that list, **Headers** `Access-Control-Allow-Origin: *`.
+   - **Empty → list:** branch on `triggerOutputs()?['queries']?['folder']` so the picker can
+     list fresh batches **or** in-progress files:
+     - `= annotations` → **List folder** on `ner/annotations` → **Select** each item to
+       `concat('annotations/', item()?['{Name}'])`
+     - otherwise → **List folder** on `ner/input` → **Select** each item to
+       `concat('input/', item()?['{Name}'])`
+     Then **Response** 200, **Body** = the list, **Headers** `Access-Control-Allow-Origin: *`.
+     (Names come back folder-prefixed, so the get branch's `/ner/<file>` path resolves either way.)
    - **Not empty → get:** SharePoint **Get file content using path**, **File Path** =
      `@{concat('/ner/', triggerOutputs()?['queries']?['file'])}` → **Response** 200,
      **Body** = the file content, **Headers** `Access-Control-Allow-Origin: *` and
@@ -210,7 +215,9 @@ const OFAC_FILE    = "reference/ofac_list.csv";  // path relative to ner/
 Save the file; distribute it or embed it in the SharePoint page.
 
 ### 5. What a reviewer does
-1. Open the page → the **OFAC list auto-loads** and the **batch dropdown auto-fills** from `input/`.
+1. Open the page → the **OFAC list auto-loads** and the **dropdown auto-fills**. Use the
+   **source toggle** to list **New batches** (`input/`) or **In-progress** files
+   (`annotations/`, to resume on another machine).
 2. Enter **initials**.
 3. Pick a batch → **⬇ Load** → annotate (labels, OFAC IDs).
 4. **⬆ Save to SharePoint** → writes/overwrites `annotated_batch-{initials}.json` in `annotations/`.
@@ -218,7 +225,7 @@ Save the file; distribute it or embed it in the SharePoint page.
 ### Caveats
 - **Premium connectors:** the HTTP-request trigger and "Send an HTTP request to SharePoint"
   are Premium Power Automate.
-- **Cross-machine resume isn't wired:** the picker lists `input/` (fresh batches), not your
-  saved `annotations/`. Same-machine resume is covered by the browser autosave; resuming a
-  partly-finished file from SharePoint on another machine would need the picker to also read
-  `annotations/` (a future add).
+- **Cross-machine resume:** the source toggle can list `annotations/`, so a reviewer can
+  reload their partly-finished `annotated_batch-{initials}.json` on another machine and
+  continue. (The annotated file doesn't carry `job_id`, so the top-bar Job badge and the
+  per-job autosave key won't repopulate from it — the review state itself restores fully.)

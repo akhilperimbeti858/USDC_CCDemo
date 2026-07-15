@@ -51,6 +51,7 @@
   #country-filter:disabled { opacity: .4; }
   #sp-picker { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 220px; }
   #sp-picker:disabled { opacity: .4; }
+  #sp-source { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; }
 
   #doc {
     white-space: pre-wrap; word-wrap: break-word; line-height: 1.9;
@@ -126,7 +127,8 @@
     <input type="file" id="file-ofac" accept=".csv,.json,text/csv,application/json">
   </label>
   <span id="ofac-stat" class="muted"></span>
-  <button class="btn" id="sp-refresh" title="List batch files in SharePoint">☁ Refresh</button>
+  <select id="sp-source" title="List new batches (input) or in-progress files (annotations)"><option value="input">New batches</option><option value="annotations">In-progress</option></select>
+  <button class="btn" id="sp-refresh" title="List files in SharePoint">☁ Refresh</button>
   <select id="sp-picker" title="Pick a batch from SharePoint" disabled><option value="">SharePoint batches…</option></select>
   <button class="btn" id="sp-load" disabled>⬇ Load</button>
   <div class="nav">
@@ -867,8 +869,9 @@ function spNames(data) {
 }
 async function refreshSpList() {
   if (!GET_FLOW_URL) { toast("Set GET_FLOW_URL in this file first"); return; }
+  const folder = ($("sp-source") && $("sp-source").value) || "input";
   try {
-    const res = await fetch(spUrl("action=list"));
+    const res = await fetch(spUrl("action=list&folder=" + encodeURIComponent(folder)));
     const names = spNames(await res.json());
     const sel = $("sp-picker");
     sel.innerHTML = '<option value="">SharePoint batches…</option>' +
@@ -888,6 +891,7 @@ async function loadSpSelected() {
 }
 $("sp-refresh").addEventListener("click", refreshSpList);
 $("sp-picker").addEventListener("change", () => { $("sp-load").disabled = !$("sp-picker").value; });
+$("sp-source").addEventListener("change", refreshSpList);
 $("sp-load").addEventListener("click", loadSpSelected);
 
 // Reuse the get flow to auto-load the OFAC list (CSV or JSON) from SharePoint.

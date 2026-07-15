@@ -34,7 +34,7 @@
   .side-col { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
 
   .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
-  .doc-id { font-size: 12px; color: #555; margin-bottom: 8px; word-break: break-all; }
+  .doc-id { font-size: 16px; font-weight: 800; color: #111; margin-bottom: 8px; word-break: break-all; }
   .labelbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
   .labelbar .lbl {
     padding: 4px 10px; border-radius: 14px; font-size: 12px; font-weight: 600;
@@ -63,8 +63,8 @@
   }
 
   .panel-title {
-    font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase;
-    letter-spacing: .05em; margin-bottom: 8px;
+    font-size: 15px; font-weight: 800; color: #111; text-transform: uppercase;
+    letter-spacing: .03em; margin-bottom: 8px;
   }
   .panel-hint { font-size: 11px; color: #aaa; margin-bottom: 8px; }
 
@@ -94,6 +94,8 @@
   .ofac-row .oid { color: #2563eb; font-weight: 600; }
   .ofac-row .octry { color: #888; }
   .ofac-row .oline { color: #555; margin-top: 3px; }
+  .ofac-cat-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin: 10px 0 4px; }
+  #ofac-cat { padding: 3px 6px; border: 1px solid #ddd; border-radius: 6px; font-size: 11px; }
   #ofac-target { font-size: 11px; color: #3730a3; margin-bottom: 6px; min-height: 14px; }
 
   #modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 9998; }
@@ -162,10 +164,12 @@
       <input type="text" id="ofac-search" placeholder="Look for name or OFAC_ID…" disabled>
       <div class="ofac-controls">
         <label><input type="checkbox" id="ofac-exact"> Exact case</label>
+        <label style="margin-left:auto;">Category
+          <select id="ofac-cat" title="Filter by category"><option value="">All</option><option value="FTO">FTO</option><option value="POI">POI</option><option value="ORG">ORG</option></select>
+        </label>
       </div>
       <div id="ofac-target"></div>
-      <div id="ofac-results"><div class="muted">Load an OFAC list (CSV) to search. Recommended: the “Load OFAC list” button (cached in this browser) — see the note below.</div></div>
-      <div class="panel-hint" style="margin-top:8px;">The list can also arrive embedded in the batch JSON (<code>ofacList</code>). Recommended path is the button + browser cache, since the list is large and updates on its own cadence.</div>
+      <div id="ofac-results"><div class="muted">Load an OFAC list (CSV) to search.</div></div>
     </div>
   </div>
 </div>
@@ -692,6 +696,25 @@ function ofacRowHtml(e) {
   if (aka) h += '<div class="oline">aka: ' + aka + '</div>';
   return h + '</div>';
 }
+// Map an OFAC entry to an annotation category: FTO program -> FTO; Individual -> POI; else ORG.
+function ofacCategory(e) {
+  const prog = (e.program || "").toUpperCase();
+  const type = (e.type || "").toLowerCase();
+  if (prog.indexOf("FTO") >= 0) return "FTO";
+  if (type.indexOf("individual") >= 0) return "POI";
+  return "ORG";
+}
+// Group results by category, ordered FTO, POI, ORG, each under a colored header.
+function renderOfacGrouped(list) {
+  let html = "";
+  ["FTO", "POI", "ORG"].forEach(c => {
+    const items = list.filter(e => ofacCategory(e) === c);
+    if (!items.length) return;
+    html += '<div class="ofac-cat-head" style="color:' + colorFor(c) + '">' + c + ' (' + items.length + ')</div>';
+    items.forEach(e => { html += ofacRowHtml(e); });
+  });
+  return html;
+}
 function renderOfacPanel() {
   const box = $("ofac-results");
   const tgt = $("ofac-target");
@@ -717,11 +740,13 @@ function renderOfacPanel() {
     header = country ? ("Linked to " + country + " (" + list.length + ")")
                      : ("Type a name or OFAC ID to search (" + ofacRows.length + " entities).");
   }
-  let html = '<div class="panel-hint">' + escapeHtml(header) + '</div>';
+  const cat = $("ofac-cat") ? $("ofac-cat").value : "";
+  if (cat) list = list.filter(e => ofacCategory(e) === cat);
+  let html = '<div class="panel-hint">' + escapeHtml(header) + (cat ? (" · " + cat + " only") : "") + '</div>';
   if (!list.length) {
-    html += '<div class="muted">' + (q ? "No matches." : "No OFAC entities linked to this country — type to search.") + '</div>';
+    html += '<div class="muted">' + (q ? "No matches." : "Nothing to show — type to search.") + '</div>';
   } else {
-    list.forEach(e => { html += ofacRowHtml(e); });
+    html += renderOfacGrouped(list);   // categorized + ordered FTO, POI, ORG
   }
   box.innerHTML = html;
   [...box.querySelectorAll(".ofac-row")].forEach(el =>
@@ -747,6 +772,7 @@ function assignOfac(id) {
 }
 $("ofac-search").addEventListener("input", renderOfacPanel);
 $("ofac-exact").addEventListener("change", renderOfacPanel);
+$("ofac-cat").addEventListener("change", renderOfacPanel);
 $("file-ofac").addEventListener("change", e => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();

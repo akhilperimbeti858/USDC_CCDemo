@@ -49,6 +49,8 @@
   #review-stat { font-size: 12px; color: #555; }
   #country-filter { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 190px; }
   #country-filter:disabled { opacity: .4; }
+  #sp-picker { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 220px; }
+  #sp-picker:disabled { opacity: .4; }
 
   #doc {
     white-space: pre-wrap; word-wrap: break-word; line-height: 1.9;
@@ -124,6 +126,9 @@
     <input type="file" id="file-ofac" accept=".csv,.json,text/csv,application/json">
   </label>
   <span id="ofac-stat" class="muted"></span>
+  <button class="btn" id="sp-refresh" title="List batch files in SharePoint">☁ Refresh</button>
+  <select id="sp-picker" title="Pick a batch from SharePoint" disabled><option value="">SharePoint batches…</option></select>
+  <button class="btn" id="sp-load" disabled>⬇ Load</button>
   <div class="nav">
     <button class="btn" id="prev" disabled>◀ Prev</button>
     <span class="pos" id="pos">— / —</span>
@@ -838,6 +843,52 @@ function saveToSharepoint() {
 }
 $("save-sharepoint").addEventListener("click", saveToSharepoint);
 
+// ---- Load a batch FROM SharePoint via a Power Automate "get/list" flow ----
+// One flow, branched on the "file" query param: empty -> list input/ files; present ->
+// return that file's content. The flow's Response MUST include an
+// "Access-Control-Allow-Origin: *" header (we read the reply), and the request stays a
+// plain GET (no custom headers) so there's no CORS preflight.
+//   List branch : SharePoint "List folder" (input folder) -> Select names -> Response (JSON array + ACAO)
+//   Get branch  : SharePoint "Get file content using path" -> Response (file body + ACAO, application/json)
+// The URL returns file CONTENTS to anyone who has it -> keep it secret; validate GET_FLOW_KEY
+// in a flow Condition and 403 otherwise.
+const GET_FLOW_URL = "";   // paste your "get/list batch" flow URL here
+const GET_FLOW_KEY = "";   // optional shared secret, sent as &key=... (match it in the flow)
+function spUrl(params) {
+  let u = GET_FLOW_URL + (GET_FLOW_URL.indexOf("?") >= 0 ? "&" : "?");
+  if (GET_FLOW_KEY) u += "key=" + encodeURIComponent(GET_FLOW_KEY) + "&";
+  return u + params;
+}
+function spNames(data) {
+  const arr = Array.isArray(data) ? data : (data.value || data.files || data.items || []);
+  return arr.map(x => typeof x === "string" ? x
+      : (x.name || x.Name || x.DisplayName || x.filename || x.FileName || "")).filter(Boolean);
+}
+async function refreshSpList() {
+  if (!GET_FLOW_URL) { toast("Set GET_FLOW_URL in this file first"); return; }
+  try {
+    const res = await fetch(spUrl("action=list"));
+    const names = spNames(await res.json());
+    const sel = $("sp-picker");
+    sel.innerHTML = '<option value="">SharePoint batches…</option>' +
+      names.map(n => '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>').join("");
+    sel.disabled = names.length === 0;
+    $("sp-load").disabled = true;
+    toast("Found " + names.length + " batch file(s) in SharePoint");
+  } catch (e) { toast("Could not list SharePoint batches — check GET_FLOW_URL / CORS"); }
+}
+async function loadSpSelected() {
+  const name = $("sp-picker").value;
+  if (!name) { toast("Pick a batch first"); return; }
+  try {
+    const res = await fetch(spUrl("file=" + encodeURIComponent(name)));
+    loadBatch(await res.json());
+  } catch (e) { toast("Could not load " + name + " from SharePoint"); }
+}
+$("sp-refresh").addEventListener("click", refreshSpList);
+$("sp-picker").addEventListener("change", () => { $("sp-load").disabled = !$("sp-picker").value; });
+$("sp-load").addEventListener("click", loadSpSelected);
+
 // ---------- Browser autosave (localStorage), keyed per JOB-ID ----------
 function autosaveKey() { return "nerAutosave:" + (jobId || batchId || "default"); }
 function autosave() {
@@ -899,6 +950,8 @@ function escapeHtml(s) {
 
 // On startup, restore a cached OFAC list (method 1) if present.
 loadCachedOfac();
+// If a SharePoint "get/list" flow is configured, list available batches on load.
+if (GET_FLOW_URL) refreshSpList();
 </script>
 </body>
 </html>

@@ -162,3 +162,26 @@ preflight — so it works from the embedded iframe); `filename`/`jobId` ride as 
 the JSON is the body. The response is opaque, so the UI shows an optimistic confirmation — verify
 the file in the library. **The flow URL is a secret** (anyone with it can write); keep it private
 and optionally validate a shared secret in a flow Condition.
+
+### Loading batches from SharePoint (picker) — `annotator_ofac_sharepoint.html`
+A second flow lets reviewers pick a batch from SharePoint instead of a file upload. Set the
+`GET_FLOW_URL` (and optional `GET_FLOW_KEY`) constants; the top bar then shows **☁ Refresh →
+dropdown → ⬇ Load**.
+
+**One flow, branched on a `file` query param:**
+1. Trigger **When an HTTP request is received**.
+2. *(Recommended)* **Condition:** if `triggerOutputs()?['queries']?['key']` ≠ your secret →
+   **Response** 403 and stop. (The URL returns file contents, so protect it.)
+3. **Condition:** is `triggerOutputs()?['queries']?['file']` empty?
+   - **Yes → list branch:** SharePoint **List folder** (the `input/` folder) → *(optional)*
+     a **Select** mapping each item to its `Name` → **Response**: 200, body = that array,
+     headers **`Access-Control-Allow-Origin: *`** and `Content-Type: application/json`.
+   - **No → get branch:** SharePoint **Get file content using path** (path = the `input/`
+     folder + `/` + the `file` param) → **Response**: 200, body = the file content, headers
+     **`Access-Control-Allow-Origin: *`** and `Content-Type: application/json`.
+
+The page calls the flow with a plain **GET** (no custom headers) so there's no CORS
+preflight; the **Response's `Access-Control-Allow-Origin` header** is what lets the browser
+read the reply (unlike the save flow, which is fire-and-forget `no-cors`). `action=list` /
+`file=<name>` and `key=<secret>` ride as query params. **Both flow URLs are secrets** — the
+get/list one especially, since it hands back batch contents.

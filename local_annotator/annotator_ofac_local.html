@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NER Annotator — OFAC + local folder (off-AWS)</title>
+<title>TA Custom Entity Annotation Tool - Sanctions Screening</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; background: #f5f5f5; color: #111; padding: 12px; }
@@ -50,6 +50,8 @@
   #country-filter { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 190px; }
   #country-filter:disabled { opacity: .4; }
   #fs-picker { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 260px; }
+  .file-label.needs { background: #fee2e2; border-color: #dc2626; color: #b91c1c; font-weight: 600; }
+  .file-label.loaded { background: #dcfce7; border-color: #16a34a; color: #166534; font-weight: 600; }
   #fs-picker:disabled { opacity: .4; }
 
   #doc {
@@ -118,13 +120,10 @@
 </head>
 <body>
 
-<h1>NER Annotator <span class="muted">— OFAC + local folder (pick a folder each time)</span></h1>
+<h1>TA Custom Entity Annotation Tool <span class="muted">— Sanctions Screening</span></h1>
 
 <div class="topbar">
-  <label class="file-label">Load batch JSON
-    <input type="file" id="file-batch" accept=".json,application/json">
-  </label>
-  <label class="file-label">Load OFAC list
+  <label class="file-label needs" id="ofac-label">Load OFAC list
     <input type="file" id="file-ofac" accept=".csv,.json,text/csv,application/json">
   </label>
   <span id="ofac-stat" class="muted"></span>
@@ -205,7 +204,6 @@
 const FILL = "FILL";
 const labels = ["FTO", "POI", "ORG"];                                     // fixed order -> shortcuts 1=FTO, 2=POI, 3=ORG
 const LABEL_COLORS = { FTO: "#2563eb", POI: "#dc2626", ORG: "#16a34a" };  // blue / red / green
-const OFAC_CACHE_KEY = "ofacList:v1";
 
 let batch = [];        // [{id, text, entities:[...], meta:{...}, reviewRequired, annotatorID, country}]
 let current = 0;
@@ -665,16 +663,9 @@ function setOfacData(list, sourceLabel) {
   });
   $("ofac-search").disabled = ofacRows.length === 0;
   $("ofac-stat").textContent = ofacRows.length ? ("OFAC: " + ofacRows.length + " entities" + (sourceLabel ? " (" + sourceLabel + ")" : "")) : "";
+  const lbl = $("ofac-label");
+  if (lbl) { lbl.classList.toggle("loaded", ofacRows.length > 0); lbl.classList.toggle("needs", ofacRows.length === 0); }
   renderOfacPanel();
-}
-function cacheOfac(list) {
-  try { localStorage.setItem(OFAC_CACHE_KEY, JSON.stringify(list)); } catch (e) {}
-}
-function loadCachedOfac() {
-  try {
-    const raw = localStorage.getItem(OFAC_CACHE_KEY);
-    if (raw) setOfacData(JSON.parse(raw), "cached");
-  } catch (e) {}
 }
 function ofacMatches(query) {
   const exact = $("ofac-exact").checked;
@@ -788,7 +779,7 @@ $("file-ofac").addEventListener("change", e => {
       if (/\.json$/i.test(f.name)) list = normalizeOfac(JSON.parse(r.result));
       else list = parseOfacCsv(r.result);
       if (!list.length) { alert("No OFAC entities parsed from that file."); return; }
-      setOfacData(list, "file"); cacheOfac(list);
+      setOfacData(list, "file");
       toast("Loaded " + list.length + " OFAC entities");
     } catch (err) { alert("Could not parse OFAC list: " + err.message); }
   };
@@ -878,7 +869,7 @@ async function refreshLocalList(){
 }
 async function loadOfacFromFolder(){
   if(!nerDir) return;
-  try{ const rel=await findOfacCsv(nerDir, ""); if(!rel) return; const list=parseOfacCsv(await readFileByPath(nerDir, rel)); if(list.length){ setOfacData(list,"folder"); cacheOfac(list);} }catch(e){}
+  try{ const rel=await findOfacCsv(nerDir, ""); if(!rel) return; const list=parseOfacCsv(await readFileByPath(nerDir, rel)); if(list.length){ setOfacData(list,"folder"); } }catch(e){}
 }
 async function openFolder(){
   if(!window.showDirectoryPicker){ toast("Folder mode needs Chrome or Edge"); return; }
@@ -897,7 +888,7 @@ async function loadFsSelected(){
 async function saveToFolder(){
   if(!nerDir){ toast("Open a folder first (📂)"); return; }
   if(!batch.length) return;
-  const fname="inprogress/inprogress_"+nameSlug()+".json";
+  const fname="AnnotatedReview/inprogress/inprogress_"+nameSlug()+".json";
   try{ await writeFileByPath(nerDir, fname, JSON.stringify(buildExport(),null,2)); toast("Saved "+fname); }
   catch(e){ toast("Save failed: "+e.message); }
 }
@@ -907,10 +898,10 @@ async function exportReviewed(){
   const ini=nameSlug();
   const reviewed=batch.filter(d=>!d.reviewRequired);
   const unreviewed=batch.filter(d=>d.reviewRequired);
-  if(!confirm("Export "+reviewed.length+" reviewed → reviewed/reviewed_"+ini+".json and "+unreviewed.length+" unreviewed → unreviewed/unreviewed_"+ini+".json,\nthen restart the page?")) return;
+  if(!confirm("Export "+reviewed.length+" reviewed → AnnotatedReview/completed/reviewed/reviewed_"+ini+".json and "+unreviewed.length+" unreviewed → AnnotatedReview/completed/unreviewed/unreviewed_"+ini+".json,\nthen restart the page?")) return;
   try{
-    await writeFileByPath(nerDir, "reviewed/reviewed_"+ini+".json", JSON.stringify(buildExportFrom(reviewed),null,2));
-    await writeFileByPath(nerDir, "unreviewed/unreviewed_"+ini+".json", JSON.stringify(buildExportFrom(unreviewed),null,2));
+    await writeFileByPath(nerDir, "AnnotatedReview/completed/reviewed/reviewed_"+ini+".json", JSON.stringify(buildExportFrom(reviewed),null,2));
+    await writeFileByPath(nerDir, "AnnotatedReview/completed/unreviewed/unreviewed_"+ini+".json", JSON.stringify(buildExportFrom(unreviewed),null,2));
     clearAutosave();
     toast("Exported — restarting…");
     setTimeout(()=>location.reload(), 800);
@@ -975,14 +966,12 @@ function readJsonFile(input, cb) {
   r.onload = () => { try { cb(JSON.parse(r.result)); } catch (e) { alert("Invalid JSON: " + e.message); } };
   r.readAsText(f);
 }
-$("file-batch").addEventListener("change", e => readJsonFile(e.target, loadBatch));
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// On startup, restore a cached OFAC list (method 1) if present.
-loadCachedOfac();
+
 </script>
 </body>
 </html>

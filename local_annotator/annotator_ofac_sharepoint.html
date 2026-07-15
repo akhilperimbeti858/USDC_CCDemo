@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NER Annotator — OFAC list (off-AWS)</title>
+<title>NER Annotator — OFAC + Save to SharePoint (off-AWS)</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; background: #f5f5f5; color: #111; padding: 12px; }
@@ -114,7 +114,7 @@
 </head>
 <body>
 
-<h1>NER Annotator <span class="muted">— OFAC list · offline, no AWS</span></h1>
+<h1>NER Annotator <span class="muted">— OFAC + Save to SharePoint</span></h1>
 
 <div class="topbar">
   <label class="file-label">Load batch JSON
@@ -135,8 +135,7 @@
   <button class="btn" id="next-country-unreviewed" disabled>Next unreviewed · country ⏭</button>
   <div class="spacer"></div>
   <span id="autosave-ind" class="muted" title="Work is auto-saved in this browser"></span>
-  <button class="btn" id="save-progress" disabled>💾 Save progress</button>
-  <button class="btn primary" id="export" disabled>⬇ Export annotated batch</button>
+  <button class="btn primary" id="save-sharepoint" disabled title="POST the annotated JSON to your Power Automate flow">⬆ Save to SharePoint</button>
   <span id="annotator-tag" class="muted" style="margin-left:8px;"></span>
 </div>
 
@@ -262,7 +261,7 @@ function loadBatch(obj) {
   renderAll();
   updateReviewStat();
   $("prev").disabled = $("next").disabled = batch.length <= 1;
-  $("export").disabled = $("save-progress").disabled = batch.length === 0;
+  $("save-sharepoint").disabled = batch.length === 0;
   $("country-filter").disabled = $("next-country-unreviewed").disabled = batch.length === 0;
   if (!batch.length) { $("doc-id").textContent = "Batch file had no documents."; return; }
   const done = reviewedCount();
@@ -809,25 +808,35 @@ function buildExport() {
       { entities: ents, metaData: metaData });
   }) };
 }
-function downloadJson(obj, name) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = name;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(a.href);
-}
 // initials slug (already <=3 uppercase letters); "annotator" if somehow empty.
 function nameSlug() { return annotatorName || "annotator"; }
-function exportBatch() {
-  downloadJson(buildExport(), "annotated_batch-" + nameSlug() + "_finished.json");
-  toast("Exported " + batch.length + " documents");
+
+// ---- Save directly to SharePoint via a Power Automate flow ----
+// Paste your Power Automate "When an HTTP request is received" URL below. Flow steps:
+//   1) Instant cloud flow -> trigger "When an HTTP request is received".
+//   2) Action SharePoint "Create file":
+//        Site Address = your site; Folder Path = your annotations folder;
+//        File Name    = @{triggerOutputs()?['queries']?['filename']}
+//        File Content = @{triggerBody()}
+//   3) Save; copy the generated POST URL into FLOW_URL. It is a SECRET (anyone with it
+//      can write) — keep it private; optionally validate a shared secret in a Condition.
+const FLOW_URL = "";
+function saveToSharepoint() {
+  if (!batch.length) return;
+  if (!FLOW_URL) { toast("Set FLOW_URL in this file first"); return; }
+  const fname = "annotated_batch-" + nameSlug() + ".json";
+  // text/plain + no-cors = a CORS "simple request" (no preflight) so it works from the
+  // SharePoint embed; filename/jobId ride as query params, the JSON is the body.
+  const url = FLOW_URL + (FLOW_URL.indexOf("?") >= 0 ? "&" : "?")
+    + "filename=" + encodeURIComponent(fname)
+    + "&jobId=" + encodeURIComponent(jobId)
+    + "&annotator=" + encodeURIComponent(annotatorName);
+  fetch(url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" },
+               body: JSON.stringify(buildExport(), null, 2) })
+    .then(() => toast("Sent to SharePoint: " + fname))
+    .catch(() => toast("Save failed — check FLOW_URL / network"));
 }
-function saveProgress() {
-  downloadJson(buildExport(), "annotated_batch-" + nameSlug() + ".json");
-  toast("Saved progress for " + batch.length + " documents");
-}
-$("export").addEventListener("click", exportBatch);
-$("save-progress").addEventListener("click", saveProgress);
+$("save-sharepoint").addEventListener("click", saveToSharepoint);
 
 // ---------- Browser autosave (localStorage), keyed per JOB-ID ----------
 function autosaveKey() { return "nerAutosave:" + (jobId || batchId || "default"); }

@@ -125,3 +125,40 @@ The **Batch ID is used only in the download filename** — `annotated_batch_{BAT
 - **Consolidating many reviewers' exports** (computed hit/no-hit × reviewed/unreviewed
   categories, multi-reviewer merge, training-set assembly) lives in **`consolidation/`** —
   see `consolidation/README.md`.
+
+## Variants — `annotator_ofac.html` and `annotator_ofac_sharepoint.html`
+
+Both build on the badged annotator and add:
+- **Initials** (≤3 letters, no spaces) instead of a full name; **JOB-ID** read from the batch
+  payload (`job_id`) and shown as `Annotator: ABC · Job <id>`.
+- **COUNTRY** per document (payload `country`, or a top-level `countries` map keyed by filename):
+  a document pill, a group-by-country dropdown, and **Next unreviewed · country**.
+- An **integrated OFAC list panel**. Load the list with **Load OFAC list** (CSV `ID, Type, Text`
+  plus optional `Program` and `Country`; one row per name/alias, grouped by ID; countries single
+  or `;`-joined), or embed it in the batch JSON as `ofacList`. Empty search box → entities
+  **linked to the current document's COUNTRY**; otherwise search **name / alias / OFAC ID**
+  (case-insensitive, with an **Exact case** toggle). Click an entity card to target it, then click
+  an OFAC row to assign its ID. Results show **Name (ID)** then **Type / Program / Countries / aka**
+  each on its own line.
+
+**`annotator_ofac.html`** exports via download: **💾 Save progress** →
+`annotated_batch-{initials}.json`, **⬇ Export** → `annotated_batch-{initials}_finished.json`.
+
+**`annotator_ofac_sharepoint.html`** replaces those with a single **⬆ Save to SharePoint** that
+POSTs the annotated JSON to a **Power Automate** flow (no Entra app, works inside the SharePoint
+embed). Set the `FLOW_URL` constant near the top of the file to your flow's URL.
+
+### Power Automate flow (for the SharePoint variant)
+1. **make.powerautomate.com → Create → Instant cloud flow → "When an HTTP request is received"**.
+2. Add **SharePoint → Create file**:
+   - **Site Address** = your site; **Folder Path** = your `annotations` folder (route by the
+     `jobId` query if you like);
+   - **File Name** = `@{triggerOutputs()?['queries']?['filename']}`
+   - **File Content** = `@{triggerBody()}`
+3. **Save**, copy the generated **POST URL**, paste it into `FLOW_URL`.
+
+The page sends `Content-Type: text/plain` with `mode: no-cors` (a CORS "simple request" — no
+preflight — so it works from the embedded iframe); `filename`/`jobId` ride as URL query params and
+the JSON is the body. The response is opaque, so the UI shows an optimistic confirmation — verify
+the file in the library. **The flow URL is a secret** (anyone with it can write); keep it private
+and optionally validate a shared secret in a flow Condition.

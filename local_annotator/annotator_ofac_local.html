@@ -49,8 +49,8 @@
   #review-stat { font-size: 12px; color: #555; }
   #country-filter { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 190px; }
   #country-filter:disabled { opacity: .4; }
-  #fs-source, #fs-picker { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 200px; }
-  #fs-source:disabled, #fs-picker:disabled { opacity: .4; }
+  #fs-picker { padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #fff; max-width: 260px; }
+  #fs-picker:disabled { opacity: .4; }
 
   #doc {
     white-space: pre-wrap; word-wrap: break-word; line-height: 1.9;
@@ -118,7 +118,7 @@
 </head>
 <body>
 
-<h1>NER Annotator <span class="muted">— OFAC + local folder (OneDrive sync)</span></h1>
+<h1>NER Annotator <span class="muted">— OFAC + local folder (pick a folder each time)</span></h1>
 
 <div class="topbar">
   <label class="file-label">Load batch JSON
@@ -129,8 +129,7 @@
   </label>
   <span id="ofac-stat" class="muted"></span>
   <button class="btn" id="fs-open" title="Open your OneDrive-synced ner folder">📂 Open folder</button>
-  <select id="fs-source" title="input (new) or annotations (resume)" disabled><option value="input">New batches</option><option value="annotations">In-progress</option></select>
-  <select id="fs-picker" title="Pick a file from the folder" disabled><option value="">Folder files…</option></select>
+  <select id="fs-picker" title="Pick any JSON file in the folder" disabled><option value="">Files in folder…</option></select>
   <button class="btn" id="fs-load" disabled>⬇ Load</button>
   <div class="nav">
     <button class="btn" id="prev" disabled>◀ Prev</button>
@@ -143,8 +142,8 @@
   <button class="btn" id="next-country-unreviewed" disabled>Next unreviewed · country ⏭</button>
   <div class="spacer"></div>
   <span id="autosave-ind" class="muted" title="Work is auto-saved in this browser"></span>
-  <button class="btn primary" id="fs-save" disabled title="Save into the annotations subfolder">💾 Save to folder</button>
-  <button class="btn" id="export" disabled title="Download a copy (fallback)">⬇ Export</button>
+  <button class="btn" id="fs-save" disabled title="Save current progress to inprogress/">💾 Save to folder</button>
+  <button class="btn primary" id="export-reviewed" disabled title="Split reviewed/unreviewed into folders, then restart">⬇ Export reviewed</button>
   <span id="annotator-tag" class="muted" style="margin-left:8px;"></span>
 </div>
 
@@ -272,7 +271,7 @@ function loadBatch(obj) {
   renderAll();
   updateReviewStat();
   $("prev").disabled = $("next").disabled = batch.length <= 1;
-  $("export").disabled = batch.length === 0;
+  $("export-reviewed").disabled = !(nerDir && batch.length);
   $("fs-save").disabled = !(nerDir && batch.length);
   $("country-filter").disabled = $("next-country-unreviewed").disabled = batch.length === 0;
   if (!batch.length) { $("doc-id").textContent = "Batch file had no documents."; return; }
@@ -824,8 +823,8 @@ document.addEventListener("keydown", e => {
 });
 
 // Build the re-loadable export object (identical shape for "Export" and "Save progress").
-function buildExport() {
-  return { documents: batch.map(d => {
+function buildExportFrom(docs) {
+  return { documents: docs.map(d => {
     const ents = [...d.entities].sort((a, b) => a.startOffset - b.startOffset)
       .map(e => ({ startOffset: e.startOffset, endOffset: e.endOffset, label: e.label }));
     const metaData = ents.map(e => {
@@ -842,6 +841,7 @@ function buildExport() {
       { entities: ents, metaData: metaData });
   }) };
 }
+function buildExport() { return buildExportFrom(batch); }
 function downloadJson(obj, name) {
   const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
@@ -851,71 +851,76 @@ function downloadJson(obj, name) {
 }
 // initials slug (already <=3 uppercase letters); "annotator" if somehow empty.
 function nameSlug() { return annotatorName || "annotator"; }
-function exportBatch() {
-  downloadJson(buildExport(), "annotated_batch-" + nameSlug() + "_finished.json");
-  toast("Exported " + batch.length + " documents");
-}
-$("export").addEventListener("click", exportBatch);
 
-// ===== File System Access: OneDrive-synced folder (no server, no Power Automate, no Premium) =====
-// The reviewer OneDrive-syncs the SharePoint library, clicks "Open folder", and picks the `ner`
-// folder. Batches load from input/ (or annotations/ to resume); "Save to folder" writes into
-// annotations/ — all local, and OneDrive syncs it to SharePoint. Chrome/Edge only.
+// ===== File System Access: pick ANY local folder (e.g. an OneDrive-synced library) =====
+// No server / Power Automate / Premium. The folder is chosen fresh each time (not remembered).
+// No input subfolder is assumed: every *.json in the picked folder (recursively) is listed, so you
+// can load a fresh batch OR resume a saved file. Outputs go to fixed subfolders:
+//   Save to folder  -> inprogress/inprogress_<initials>.json
+//   Export reviewed -> reviewed/reviewed_<initials>.json + unreviewed/unreviewed_<initials>.json
+// Chrome/Edge only; run locally (the SharePoint embed blocks this API).
 let nerDir = null;
-const OFAC_PATH = "reference/ofac_list.csv";   // optional OFAC CSV path within the ner folder
-
-// tiny IndexedDB store so the folder reconnects next session
-function idb(cb){ const r=indexedDB.open("nerFS",1); r.onupgradeneeded=()=>r.result.createObjectStore("kv"); r.onsuccess=()=>cb(r.result); r.onerror=()=>cb(null); }
-function idbSet(k,v){ idb(db=>{ if(!db)return; db.transaction("kv","readwrite").objectStore("kv").put(v,k); }); }
-function idbGet(k){ return new Promise(res=>idb(db=>{ if(!db)return res(null); const g=db.transaction("kv","readonly").objectStore("kv").get(k); g.onsuccess=()=>res(g.result||null); g.onerror=()=>res(null); })); }
 
 async function dirByPath(root, parts, create){ let d=root; for(const p of parts) d=await d.getDirectoryHandle(p,{create:!!create}); return d; }
 async function readFileByPath(root, path){ const parts=path.split("/").filter(Boolean); const f=parts.pop(); const d=await dirByPath(root,parts,false); return await (await (await d.getFileHandle(f)).getFile()).text(); }
 async function writeFileByPath(root, path, text){ const parts=path.split("/").filter(Boolean); const f=parts.pop(); const d=await dirByPath(root,parts,true); const fh=await d.getFileHandle(f,{create:true}); const w=await fh.createWritable(); await w.write(text); await w.close(); }
-async function listJson(root, folder){ const parts=folder.split("/").filter(Boolean); let d; try{ d=await dirByPath(root,parts,false); }catch(e){ return []; } const out=[]; for await (const [name,h] of d.entries()) if(h.kind==="file" && /\.json$/i.test(name)) out.push(name); return out.sort(); }
+async function walkJson(dir, prefix, out){ for await (const [name,h] of dir.entries()){ const rel=prefix?prefix+"/"+name:name; if(h.kind==="file"){ if(/\.json$/i.test(name)) out.push(rel); } else if(h.kind==="directory"){ await walkJson(h, rel, out); } } }
+async function findOfacCsv(dir, prefix){ for await (const [name,h] of dir.entries()){ const rel=prefix?prefix+"/"+name:name; if(h.kind==="file"){ if(/ofac.*\.csv$/i.test(name)) return rel; } else if(h.kind==="directory"){ const r=await findOfacCsv(h, rel); if(r) return r; } } return null; }
 
-function fsFolder(){ return ($("fs-source") && $("fs-source").value) || "input"; }
 async function refreshLocalList(){
   if(!nerDir) return;
-  const names = await listJson(nerDir, fsFolder());
+  const out=[]; try{ await walkJson(nerDir, "", out); }catch(e){}
+  out.sort();
   const sel=$("fs-picker");
-  sel.innerHTML='<option value="">Folder files…</option>'+names.map(n=>'<option value="'+escapeHtml(n)+'">'+escapeHtml(n)+'</option>').join("");
-  sel.disabled = names.length===0; $("fs-source").disabled=false; $("fs-load").disabled=true;
-  toast("Found "+names.length+" file(s) in "+fsFolder()+"/");
+  sel.innerHTML='<option value="">Files in folder…</option>'+out.map(n=>'<option value="'+escapeHtml(n)+'">'+escapeHtml(n)+'</option>').join("");
+  sel.disabled=out.length===0; $("fs-load").disabled=true;
+  toast("Found "+out.length+" JSON file(s)");
 }
 async function loadOfacFromFolder(){
   if(!nerDir) return;
-  try{ const txt=await readFileByPath(nerDir, OFAC_PATH); const list=parseOfacCsv(txt); if(list.length){ setOfacData(list,"folder"); cacheOfac(list);} }catch(e){/* no OFAC file present */}
+  try{ const rel=await findOfacCsv(nerDir, ""); if(!rel) return; const list=parseOfacCsv(await readFileByPath(nerDir, rel)); if(list.length){ setOfacData(list,"folder"); cacheOfac(list);} }catch(e){}
 }
 async function openFolder(){
   if(!window.showDirectoryPicker){ toast("Folder mode needs Chrome or Edge"); return; }
   try{
-    let h = nerDir || await idbGet("nerDir");
-    if(h && h.requestPermission){ const p=await h.requestPermission({mode:"readwrite"}); if(p!=="granted") h=null; }
-    if(!h) h = await window.showDirectoryPicker({ id:"ner-folder", mode:"readwrite" });
-    nerDir=h; idbSet("nerDir", h);
+    nerDir = await window.showDirectoryPicker({ mode:"readwrite" });   // asked every time; not remembered
     await refreshLocalList(); await loadOfacFromFolder();
-    $("fs-save").disabled = !(nerDir && batch.length);
-    toast("Folder connected — "+(nerDir.name||"ner"));
+    $("export-reviewed").disabled = $("fs-save").disabled = !(nerDir && batch.length);
+    toast("Folder connected — "+(nerDir.name||""));
   }catch(e){ /* user cancelled */ }
 }
 async function loadFsSelected(){
   const name=$("fs-picker").value; if(!name){ toast("Pick a file first"); return; }
-  try{ const txt=await readFileByPath(nerDir, fsFolder()+"/"+name); loadBatch(JSON.parse(txt)); $("fs-save").disabled=!(nerDir&&batch.length); }
+  try{ const txt=await readFileByPath(nerDir, name); loadBatch(JSON.parse(txt)); $("export-reviewed").disabled=$("fs-save").disabled=!(nerDir&&batch.length); }
   catch(e){ toast("Could not read "+name); }
 }
 async function saveToFolder(){
-  if(!nerDir){ toast("Open the folder first (📂)"); return; }
+  if(!nerDir){ toast("Open a folder first (📂)"); return; }
   if(!batch.length) return;
-  const fname="annotated_batch-"+nameSlug()+".json";
-  try{ await writeFileByPath(nerDir, "annotations/"+fname, JSON.stringify(buildExport(),null,2)); toast("Saved to annotations/"+fname); }
+  const fname="inprogress/inprogress_"+nameSlug()+".json";
+  try{ await writeFileByPath(nerDir, fname, JSON.stringify(buildExport(),null,2)); toast("Saved "+fname); }
   catch(e){ toast("Save failed: "+e.message); }
 }
+async function exportReviewed(){
+  if(!nerDir){ toast("Open a folder first (📂)"); return; }
+  if(!batch.length) return;
+  const ini=nameSlug();
+  const reviewed=batch.filter(d=>!d.reviewRequired);
+  const unreviewed=batch.filter(d=>d.reviewRequired);
+  if(!confirm("Export "+reviewed.length+" reviewed → reviewed/reviewed_"+ini+".json and "+unreviewed.length+" unreviewed → unreviewed/unreviewed_"+ini+".json,\nthen restart the page?")) return;
+  try{
+    await writeFileByPath(nerDir, "reviewed/reviewed_"+ini+".json", JSON.stringify(buildExportFrom(reviewed),null,2));
+    await writeFileByPath(nerDir, "unreviewed/unreviewed_"+ini+".json", JSON.stringify(buildExportFrom(unreviewed),null,2));
+    clearAutosave();
+    toast("Exported — restarting…");
+    setTimeout(()=>location.reload(), 800);
+  }catch(e){ toast("Export failed: "+e.message); }
+}
 $("fs-open").addEventListener("click", openFolder);
-$("fs-source").addEventListener("change", refreshLocalList);
 $("fs-picker").addEventListener("change", ()=>{ $("fs-load").disabled=!$("fs-picker").value; });
 $("fs-load").addEventListener("click", loadFsSelected);
 $("fs-save").addEventListener("click", saveToFolder);
+$("export-reviewed").addEventListener("click", exportReviewed);
 
 // ---------- Browser autosave (localStorage), keyed per JOB-ID ----------
 function autosaveKey() { return "nerAutosave:" + (jobId || batchId || "default"); }
@@ -978,15 +983,6 @@ function escapeHtml(s) {
 
 // On startup, restore a cached OFAC list (method 1) if present.
 loadCachedOfac();
-// Reconnect a previously-picked folder if the browser kept read/write permission.
-(async () => {
-  try { const h = await idbGet("nerDir");
-    if (h && h.queryPermission && (await h.queryPermission({mode:"readwrite"})) === "granted") {
-      nerDir = h; await refreshLocalList(); await loadOfacFromFolder();
-      if (batch.length) $("fs-save").disabled = false;
-    }
-  } catch (e) {}
-})();
 </script>
 </body>
 </html>

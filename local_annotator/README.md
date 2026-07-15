@@ -229,3 +229,25 @@ Save the file; distribute it or embed it in the SharePoint page.
   reload their partly-finished `annotated_batch-{initials}.json` on another machine and
   continue. (The annotated file doesn't carry `job_id`, so the top-bar Job badge and the
   per-job autosave key won't repopulate from it — the review state itself restores fully.)
+
+## No-Premium variant — `annotator_ofac_local.html` (OneDrive-synced folder)
+
+Same annotator (initials, JOB-ID, COUNTRY, OFAC panel) but with **no Power Automate and no
+Premium** — it reads/writes an **OneDrive-synced** copy of the SharePoint library directly via
+the browser **File System Access API**. **Chrome or Edge, run locally** (not inside the
+SharePoint embed — the iframe blocks this API).
+
+**Setup (reviewer, once):** in SharePoint click **Sync** on the library so `ner/` appears under
+OneDrive locally; set the batch folder to *Always keep on this device*.
+
+**Use:**
+1. Open `annotator_ofac_local.html` in Chrome → **📂 Open folder** → pick your synced **`ner`** folder
+   (grant read/write). It remembers the folder for next time.
+2. It auto-loads the OFAC list from `reference/ofac_list.csv` (if present) and lists batches.
+3. Toggle **New batches** (`input/`) or **In-progress** (`annotations/`) → pick → **⬇ Load**.
+4. Annotate → **💾 Save to folder** writes/overwrites `annotations/annotated_batch-{initials}.json`
+   in the synced folder; OneDrive syncs it to SharePoint. (**⬇ Export** downloads a copy as a fallback.)
+
+Expected folder layout under the picked `ner` folder: `input/` (batches), `annotations/`
+(saves, auto-created), `reference/ofac_list.csv` (optional). Non-Chromium browsers fall back to
+the **Load batch JSON** / **Load OFAC list** file pickers + **Export** download.

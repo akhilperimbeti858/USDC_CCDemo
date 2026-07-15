@@ -148,56 +148,77 @@ Both build on the badged annotator and add:
 POSTs the annotated JSON to a **Power Automate** flow (no Entra app, works inside the SharePoint
 embed). Set the `FLOW_URL` constant near the top of the file to your flow's URL.
 
-### Power Automate flow (for the SharePoint variant)
+## End-to-end SharePoint + Power Automate setup
+
+Everything needed to run `annotator_ofac_sharepoint.html` against SharePoint, in order.
+**You create two flows total:** one to **Save** reviews (write) and one to **Get/List**
+(read) — the read flow serves **both** the batches *and* the OFAC list, so there's no third
+flow. (The two behave differently: the read flow's Response must send a CORS header because
+the browser reads the reply; the save flow is fire-and-forget.)
+
+### 1. SharePoint folders (manual, one-time)
+Under a top `ner` folder in your library, create:
+- **`ner/input`** — batches to review (`batch_<jobId>.json`); your Databricks SharePoint
+  connection drops them here, or you upload them.
+- **`ner/annotations`** — where saved reviews land.
+- **`ner/reference`** — upload the OFAC CSV here as `ofac_list.csv` (re-upload when it changes).
+
+Note each folder's server-relative path (e.g. `/sites/<YourSite>/Shared Documents/ner/annotations`).
+
+### 2. Flow A — Save reviews (write) → `FLOW_URL`
 1. **make.powerautomate.com → Create → Instant cloud flow → "When an HTTP request is received"**.
-2. Add **SharePoint → "Send an HTTP request to SharePoint"** (this **overwrites** in place —
-   needed so re-saving to continue previous work updates the same file):
-   - **Site Address** = your site
-   - **Method** = `POST`
-   - **Uri** =
-     `_api/web/GetFolderByServerRelativeUrl('<server-relative annotations folder>')/Files/add(url='@{triggerOutputs()?['queries']?['filename']}',overwrite=true)`
-     (e.g. `/sites/NERReview/Shared Documents/ner/annotations`)
+2. *(Recommended)* **Condition:** `triggerOutputs()?['queries']?['key']` **is equal to** your
+   secret; in **If no** add a **Response** = 403 (stops here).
+3. **Send an HTTP request to SharePoint:**
+   - **Site Address** = your site · **Method** = `POST`
+   - **Uri** = `_api/web/GetFolderByServerRelativeUrl('/sites/<YourSite>/Shared Documents/ner/annotations')/Files/add(url='@{triggerOutputs()?['queries']?['filename']}',overwrite=true)`
    - **Body** = `@{triggerBody()}`
-3. **Save**, copy the trigger's generated **POST URL**, paste it into `FLOW_URL`.
+4. **Save**, then reopen the trigger and copy the **HTTP POST URL** → this is **`FLOW_URL`**.
 
-> `overwrite=true` updates the file in place. The plain **Create file** action does **not**
-> overwrite — it makes numbered duplicates (`annotated_batch-JPD 1.json`, …). Filenames are
-> per-reviewer (`annotated_batch-{initials}.json`), so reviewers only ever overwrite their own file.
+> `overwrite=true` updates the file in place (so re-saving to continue previous work replaces
+> it). The plain **Create file** action does **not** overwrite — it makes numbered duplicates.
+> Filenames are per-reviewer (`annotated_batch-{initials}.json`), so reviewers only overwrite
+> their own file. The page posts `text/plain` + `no-cors` (a CORS "simple request" — no
+> preflight — works inside the embed); `filename`/`jobId` ride as query params.
 
-The page sends `Content-Type: text/plain` with `mode: no-cors` (a CORS "simple request" — no
-preflight — so it works from the embedded iframe); `filename`/`jobId` ride as URL query params and
-the JSON is the body. The response is opaque, so the UI shows an optimistic confirmation — verify
-the file in the library. **The flow URL is a secret** (anyone with it can write); keep it private
-and optionally validate a shared secret in a flow Condition.
+### 3. Flow B — Get / List (read; batches **and** OFAC) → `GET_FLOW_URL`
+1. New **Instant cloud flow → "When an HTTP request is received"**.
+2. *(Recommended)* the same **key Condition** (403 if the secret doesn't match).
+3. **Condition:** is `triggerOutputs()?['queries']?['file']` **empty**?
+   - **Empty → list:** SharePoint **List folder** on `ner/input` → *(optional)* **Select**
+     mapping each item to `concat('input/', item()?['{Name}'])` → **Response** 200,
+     **Body** = that list, **Headers** `Access-Control-Allow-Origin: *`.
+   - **Not empty → get:** SharePoint **Get file content using path**, **File Path** =
+     `@{concat('/ner/', triggerOutputs()?['queries']?['file'])}` → **Response** 200,
+     **Body** = the file content, **Headers** `Access-Control-Allow-Origin: *` and
+     `Content-Type: application/json`.
+4. **Save**, copy this trigger's **HTTP POST URL** → this is **`GET_FLOW_URL`**.
 
-### Loading batches from SharePoint (picker) — `annotator_ofac_sharepoint.html`
-A second flow lets reviewers pick a batch from SharePoint instead of a file upload. Set the
-`GET_FLOW_URL` (and optional `GET_FLOW_KEY`) constants; the top bar then shows **☁ Refresh →
-dropdown → ⬇ Load**.
+> The page calls Flow B with a plain **GET** (no custom headers → no preflight); the
+> **`Access-Control-Allow-Origin` header on the Response** is what lets the browser read the
+> reply. `action=list` / `file=<name>` / `key=<secret>` ride as query params. **Both flow
+> URLs are secrets** — the read one especially, since it returns file contents.
 
-**One flow, branched on a `file` query param:**
-1. Trigger **When an HTTP request is received**.
-2. *(Recommended)* **Condition:** if `triggerOutputs()?['queries']?['key']` ≠ your secret →
-   **Response** 403 and stop. (The URL returns file contents, so protect it.)
-3. **Condition:** is `triggerOutputs()?['queries']?['file']` empty?
-   - **Yes → list branch:** SharePoint **List folder** (the `input/` folder) → *(optional)*
-     a **Select** mapping each item to its `Name` → **Response**: 200, body = that array,
-     headers **`Access-Control-Allow-Origin: *`** and `Content-Type: application/json`.
-   - **No → get branch:** SharePoint **Get file content using path** (path = the `input/`
-     folder + `/` + the `file` param) → **Response**: 200, body = the file content, headers
-     **`Access-Control-Allow-Origin: *`** and `Content-Type: application/json`.
+### 4. Fill in the HTML constants
+Near the top of the `<script>` in `annotator_ofac_sharepoint.html`:
+```js
+const FLOW_URL     = "…Flow A save URL…";
+const GET_FLOW_URL = "…Flow B get/list URL…";
+const GET_FLOW_KEY = "…your secret…";            // "" if you skipped the key Condition
+const OFAC_FILE    = "reference/ofac_list.csv";  // path relative to ner/
+```
+Save the file; distribute it or embed it in the SharePoint page.
 
-The page calls the flow with a plain **GET** (no custom headers) so there's no CORS
-preflight; the **Response's `Access-Control-Allow-Origin` header** is what lets the browser
-read the reply (unlike the save flow, which is fire-and-forget `no-cors`). `action=list` /
-`file=<name>` and `key=<secret>` ride as query params. **Both flow URLs are secrets** — the
-get/list one especially, since it hands back batch contents.
+### 5. What a reviewer does
+1. Open the page → the **OFAC list auto-loads** and the **batch dropdown auto-fills** from `input/`.
+2. Enter **initials**.
+3. Pick a batch → **⬇ Load** → annotate (labels, OFAC IDs).
+4. **⬆ Save to SharePoint** → writes/overwrites `annotated_batch-{initials}.json` in `annotations/`.
 
-
-### Auto-loading the OFAC list from SharePoint (reuses the get flow)
-Set `OFAC_FILE` (e.g. `"ofac_list.csv"`) in `annotator_ofac_sharepoint.html` and the page
-auto-loads the OFAC list on startup via the **same get flow** (`GET_FLOW_URL`), caching it in
-the browser. The file must be reachable by the get flow's `file=` param (put it in the folder
-the flow reads, or have the flow accept a relative path), and the flow's Response needs the
-`Access-Control-Allow-Origin` header (it's read as text). The **Load OFAC list** button remains
-a fallback; since the list changes rarely and is cached, a manual one-time load is often enough.
+### Caveats
+- **Premium connectors:** the HTTP-request trigger and "Send an HTTP request to SharePoint"
+  are Premium Power Automate.
+- **Cross-machine resume isn't wired:** the picker lists `input/` (fresh batches), not your
+  saved `annotations/`. Same-machine resume is covered by the browser autosave; resuming a
+  partly-finished file from SharePoint on another machine would need the picker to also read
+  `annotations/` (a future add).

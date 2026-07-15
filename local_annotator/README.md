@@ -237,16 +237,20 @@ it reads/writes a **local folder** (e.g. an OneDrive-synced SharePoint library) 
 browser **File System Access API**. **Chrome or Edge, run locally** (not inside the SharePoint
 embed — the iframe blocks this API).
 
-- **📂 Open folder** — pick any folder; you're asked **every time** (the folder is **not
-  remembered**). No subfolder layout is assumed: **every `*.json` in the folder (recursively)** is
-  listed in the dropdown (relative path), so you can load a fresh batch **or** resume a saved file.
-  It also auto-loads the OFAC list if it finds a CSV whose name contains `ofac`.
+- **📂 Open folder** — open the **`ground-truth-annotation`** workspace folder (it contains
+  `AWS_RawOutput/` with the input batches); you're asked **every time** (the folder is **not
+  remembered**). **Every `*.json` in it (recursively)** is listed in the dropdown (relative path),
+  so you can load a fresh batch from `AWS_RawOutput/` **or** resume a saved file. It also auto-loads
+  the OFAC list if it finds a CSV whose name contains `ofac`. (A browser can only write **inside**
+  the folder you open, so opening `ground-truth-annotation` — not `AWS_RawOutput` — lets results go
+  to a **sibling** `AnnotatedReview/`.)
 - **⬇ Load** — reads the selected file. **💾 Save to folder** — writes the current in-progress state
-  to **`inprogress/inprogress_{initials}.json`**.
+  to **`AnnotatedReview/inprogress/inprogress_{initials}.json`**.
 - **⬇ Export reviewed** — after a **confirmation**, splits the batch and writes
-  **`reviewed/reviewed_{initials}.json`** (docs marked reviewed) and
-  **`unreviewed/unreviewed_{initials}.json`** (the rest), then **restarts the page** (so the folder
-  is re-selected for the next batch).
+  **`AnnotatedReview/completed/reviewed/reviewed_{initials}.json`** (docs marked reviewed) and
+  **`AnnotatedReview/completed/unreviewed/unreviewed_{initials}.json`** (the rest), then **restarts
+  the page** (so the workspace is re-selected for the next batch).
 
-The `inprogress/`, `reviewed/`, `unreviewed/` subfolders are created as needed; writes overwrite in
-place. Non-Chromium browsers fall back to the **Load batch JSON** / **Load OFAC list** file pickers.
+The `AnnotatedReview/` tree (a **sibling** of `AWS_RawOutput/`) is created as needed; writes
+overwrite in place. The **Load OFAC list** button is red until a list loads, then green. Non-Chromium
+browsers fall back to the **Load OFAC list** file picker.

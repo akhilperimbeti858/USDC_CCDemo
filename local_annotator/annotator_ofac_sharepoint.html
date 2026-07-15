@@ -854,6 +854,7 @@ $("save-sharepoint").addEventListener("click", saveToSharepoint);
 // in a flow Condition and 403 otherwise.
 const GET_FLOW_URL = "";   // paste your "get/list batch" flow URL here
 const GET_FLOW_KEY = "";   // optional shared secret, sent as &key=... (match it in the flow)
+const OFAC_FILE = "";      // e.g. "ofac_list.csv" — reuse the get flow to auto-load the OFAC list
 function spUrl(params) {
   let u = GET_FLOW_URL + (GET_FLOW_URL.indexOf("?") >= 0 ? "&" : "?");
   if (GET_FLOW_KEY) u += "key=" + encodeURIComponent(GET_FLOW_KEY) + "&";
@@ -888,6 +889,17 @@ async function loadSpSelected() {
 $("sp-refresh").addEventListener("click", refreshSpList);
 $("sp-picker").addEventListener("change", () => { $("sp-load").disabled = !$("sp-picker").value; });
 $("sp-load").addEventListener("click", loadSpSelected);
+
+// Reuse the get flow to auto-load the OFAC list (CSV or JSON) from SharePoint.
+async function loadOfacFromSharepoint() {
+  if (!GET_FLOW_URL || !OFAC_FILE) return;
+  try {
+    const res = await fetch(spUrl("file=" + encodeURIComponent(OFAC_FILE)));
+    const txt = await res.text();  // CSV (or JSON) text
+    const list = /\.json$/i.test(OFAC_FILE) ? normalizeOfac(JSON.parse(txt)) : parseOfacCsv(txt);
+    if (list.length) { setOfacData(list, "SharePoint"); cacheOfac(list); }
+  } catch (e) { /* keep the localStorage cache / manual "Load OFAC list" button as fallback */ }
+}
 
 // ---------- Browser autosave (localStorage), keyed per JOB-ID ----------
 function autosaveKey() { return "nerAutosave:" + (jobId || batchId || "default"); }
@@ -952,6 +964,8 @@ function escapeHtml(s) {
 loadCachedOfac();
 // If a SharePoint "get/list" flow is configured, list available batches on load.
 if (GET_FLOW_URL) refreshSpList();
+// Reuse that flow to auto-load the OFAC list when OFAC_FILE is set.
+if (GET_FLOW_URL && OFAC_FILE) loadOfacFromSharepoint();
 </script>
 </body>
 </html>

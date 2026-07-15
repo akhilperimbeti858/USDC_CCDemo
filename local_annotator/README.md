@@ -150,12 +150,19 @@ embed). Set the `FLOW_URL` constant near the top of the file to your flow's URL.
 
 ### Power Automate flow (for the SharePoint variant)
 1. **make.powerautomate.com → Create → Instant cloud flow → "When an HTTP request is received"**.
-2. Add **SharePoint → Create file**:
-   - **Site Address** = your site; **Folder Path** = your `annotations` folder (route by the
-     `jobId` query if you like);
-   - **File Name** = `@{triggerOutputs()?['queries']?['filename']}`
-   - **File Content** = `@{triggerBody()}`
-3. **Save**, copy the generated **POST URL**, paste it into `FLOW_URL`.
+2. Add **SharePoint → "Send an HTTP request to SharePoint"** (this **overwrites** in place —
+   needed so re-saving to continue previous work updates the same file):
+   - **Site Address** = your site
+   - **Method** = `POST`
+   - **Uri** =
+     `_api/web/GetFolderByServerRelativeUrl('<server-relative annotations folder>')/Files/add(url='@{triggerOutputs()?['queries']?['filename']}',overwrite=true)`
+     (e.g. `/sites/NERReview/Shared Documents/ner/annotations`)
+   - **Body** = `@{triggerBody()}`
+3. **Save**, copy the trigger's generated **POST URL**, paste it into `FLOW_URL`.
+
+> `overwrite=true` updates the file in place. The plain **Create file** action does **not**
+> overwrite — it makes numbered duplicates (`annotated_batch-JPD 1.json`, …). Filenames are
+> per-reviewer (`annotated_batch-{initials}.json`), so reviewers only ever overwrite their own file.
 
 The page sends `Content-Type: text/plain` with `mode: no-cors` (a CORS "simple request" — no
 preflight — so it works from the embedded iframe); `filename`/`jobId` ride as URL query params and
@@ -185,3 +192,12 @@ preflight; the **Response's `Access-Control-Allow-Origin` header** is what lets 
 read the reply (unlike the save flow, which is fire-and-forget `no-cors`). `action=list` /
 `file=<name>` and `key=<secret>` ride as query params. **Both flow URLs are secrets** — the
 get/list one especially, since it hands back batch contents.
+
+
+### Auto-loading the OFAC list from SharePoint (reuses the get flow)
+Set `OFAC_FILE` (e.g. `"ofac_list.csv"`) in `annotator_ofac_sharepoint.html` and the page
+auto-loads the OFAC list on startup via the **same get flow** (`GET_FLOW_URL`), caching it in
+the browser. The file must be reachable by the get flow's `file=` param (put it in the folder
+the flow reads, or have the flow accept a relative path), and the flow's Response needs the
+`Access-Control-Allow-Origin` header (it's read as text). The **Load OFAC list** button remains
+a fallback; since the list changes rarely and is cached, a manual one-time load is often enough.

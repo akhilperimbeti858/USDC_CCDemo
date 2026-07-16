@@ -62,9 +62,12 @@ ground-truth-annotation/           ← you open THIS folder in the tool
       ├─ inprogress/                ← "Save to folder" drops your partial work here
       │     inprogress_<yourInitials>.json
       │
-      └─ completed/                 ← "Export reviewed" drops your finished work here
-            ├─ reviewed/            reviewed_<yourInitials>.json
-            └─ unreviewed/          unreviewed_<yourInitials>.json
+      ├─ completed/                 ← "Export reviewed" drops your finished work here
+      │     ├─ reviewed/            reviewed_<yourInitials>.json
+      │     └─ unreviewed/          unreviewed_<yourInitials>.json
+      │
+      └─ benchmark/                 ← Executive sign-off lands here (see §6)
+            exec-reviewed_locked.json
 ```
 
 **Rules to remember:**
@@ -121,8 +124,10 @@ For each document:
 **Using the OFAC panel efficiently:**
 - With the **search box empty**, it automatically shows the sanctioned entities **linked to this
   document's country**, grouped and ordered **FTO → POI → ORG**.
-- To find something specific, **type a name or OFAC ID**. Use **Exact case** for precise matches and
-  the **Category** dropdown (All / FTO / POI / ORG) to narrow the list.
+- To find something specific, **type a name or OFAC ID**. Use **Exact case** for precise matches.
+- Use the **Category** dropdown (All / FTO / POI / ORG) to filter — and with the **search box empty**,
+  picking a category (e.g. **POI**) **lists every entity of that type**, so you can browse the whole
+  list, not only the ones linked to this document's country.
 - Each result shows **Name (ID)** then **Type / Program / Countries / aka (aliases)** on separate lines.
 
 ### Step 6 — Mark the document reviewed
@@ -184,17 +189,20 @@ You never edit this file by hand — the tool reads and writes it for you.
 
 ## 6. Executive / PO review (second‑level sign‑off)
 
-There is a separate template, **`annotator_ofac_local_po.html`**, for the **executive reviewer** (the
+There is a separate template, **`final_annotator_exec.html`**, for the **executive reviewer** (the
 PO / adjudication lead). It works the same way, plus:
 
 - A **🔒 Executive Reviewer** button asks for a **pass code**. Enter the exact code you were given; on
   success it greets you (**"Hello Amanda!"**) and switches into executive mode.
 - **Executive mode** can open **any** file in the workspace (including `completed/`), and it shows
   **only documents that a first reviewer already finished** (`humanReviewRequired = false`).
+- All the normal navigation still works — **Next unreviewed ⏭** and **Next unreviewed · country ⏭**
+  jump to the next document still **awaiting executive review**; the status bar shows
+  **"Awaiting exec: X · Locked: Y."**
 - Review each one, then click **Mark Exec‑Reviewed (Lock)** — that stamps the document as
   **`ExecReviewed/Locked`** and removes it from the queue.
-- Click **⬇ Export Exec‑Locked** to write the signed‑off documents to
-  **`AnnotatedReview/completed/reviewed/reviewed_PO_locked.json`** — the `_locked` marks them as final.
+- Click **⬇ Export Exec‑Locked** to write the signed‑off documents to a dedicated **benchmark**
+  folder: **`AnnotatedReview/benchmark/exec-reviewed_locked.json`** — the `_locked` marks them final.
 
 If you are a normal annotator, you won't use this template — just the standard one.
 
